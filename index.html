@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>BG — Motion Designer</title>
+  <meta name="description" content="Motion design portfolio: brand motion, title sequences, 3D and social-first content in 16:9 and 9:16.">
+  <meta name="theme-color" content="#0d0e12">
+
+  <!-- Social previews: replace the image with your own reel poster and add your final URL -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="BG — Motion Designer">
+  <meta property="og:description" content="Brand motion, title sequences, 3D and social-first content.">
+  <meta property="og:image" content="media/reel/poster.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d0e12'/%3E%3Cpath d='M16 6l10 10-10 10L6 16z' fill='%233b4bff'/%3E%3C/svg%3E">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anybody:ital,wdth,wght@0,50..150,100..900;1,50..150,100..900&family=Instrument+Sans:ital,wdth,wght@0,75..100,400..700;1,75..100,400..700&family=Martian+Mono:wdth,wght@75..112.5,300..600&display=swap">
+  <link rel="stylesheet" href="assets/css/main.css">
+
+  <!-- Your content. Loaded first so the theme is set before the page paints. -->
+  <script src="content.js"></script>
+  <script>
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem('bg-theme'); } catch (e) {}
+      var d = (window.PORTFOLIO && window.PORTFOLIO.site && window.PORTFOLIO.site.theme) || 'dark';
+      t = t || d;
+      if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <script src="assets/js/main.js" defer></script>
+</head>
+<body>
+  <a class="skip mono" href="#work">Skip to work</a>
+
+  <header class="nav is-over-media" id="nav"></header>
+  <nav class="menu" id="menu" aria-label="Menu"></nav>
+
+  <main id="main">
+    <section class="hero" id="top" aria-label="Showreel"></section>
+    <section class="highlights" id="highlights" aria-labelledby="hl-title"></section>
+    <div class="marquee" id="marquee" aria-hidden="true"></div>
+    <section class="work" id="work" aria-labelledby="work-title"></section>
+    <section class="about" id="about" aria-labelledby="about-title"></section>
+    <section class="contact" id="contact" aria-labelledby="contact-title"></section>
+  </main>
+
+  <footer class="footer mono" id="footer"></footer>
+  <nav class="rail" id="rail" aria-label="Page timeline"></nav>
+
+  <div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-labelledby="viewer-title" hidden></div>
+  <div class="float" id="float" aria-hidden="true"></div>
+  <div class="cursor" id="cursor" aria-hidden="true"></div>
+  <div class="toast mono" id="toast" role="status" aria-live="polite"></div>
+
+  <noscript>
+    <p style="padding:24px;font:16px/1.5 system-ui">This portfolio needs JavaScript to play its videos. Please enable it, or get in touch by email.</p>
+  </noscript>
+</body>
+</html>
