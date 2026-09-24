@@ -85,7 +85,7 @@ window.PORTFOLIO = {
       poster: "media/signal-bloom/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#141a3a",
+      color: "#111950",
       summary: "A sonic logo made visible. Particles gather into the Halden ring on the downbeat and scatter on the tail.",
       description: [
         "Halden needed an ident that could live everywhere their sound does: launch films, product pages and the start-up chime in the headphones' companion app.",
@@ -110,10 +110,10 @@ window.PORTFOLIO = {
       poster: "media/drop-04/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#3a1454",
+      color: "#ff5a14",
       summary: "Launch loop for a limited sneaker drop, cut to the beat for Stories and Reels.",
       description: [
-        "Twelve seconds, sound off by default, one job: make people stop scrolling. Every shape hits on a kick drum so the loop still reads as rhythmic with the sound muted.",
+        "Eight seconds, sound off by default, one job: make people stop scrolling. Every shape hits on a kick drum so the loop still reads as rhythmic with the sound muted.",
         "Delivered as a system of templates so the in-house team could version it for the next six drops."
       ],
       role: "Design, animation",
@@ -131,7 +131,7 @@ window.PORTFOLIO = {
       poster: "media/mercury/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#8c8f9c",
+      color: "#a19dc8",
       summary: "Liquid chrome textures for a serum launch, used across film, web and retail screens.",
       description: [
         "A library of slow, glossy liquid loops that sit behind product shots and type. Rendered at 4K so retail could crop freely for vertical screens."
@@ -152,10 +152,10 @@ window.PORTFOLIO = {
       poster: "media/night-bloom/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#4a1f3a",
+      color: "#5d1f40",
       summary: "A flower that opens over eight seconds, for the night-cream campaign on Stories.",
       description: [
-        "Translucent petals built as layered gradients, so the piece stays soft and readable on small screens. The loop point sits on a fully closed bud, which makes it seamless."
+        "Translucent petals built as layered gradients, so the piece stays soft and readable on small screens. New rings of petals keep opening from the centre, so the loop never shows a seam."
       ],
       role: "Design, 3D, animation",
       tools: ["Blender", "After Effects"],
@@ -173,7 +173,7 @@ window.PORTFOLIO = {
       poster: "media/say-it-louder/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#d9382c",
+      color: "#f4ecdc",
       summary: "Kinetic type rebrand for an independent radio station. Every word is set in time with the voice-over.",
       description: [
         "The station's new line is a single instruction, so the motion system does one thing: it gets louder. Type scales, slams and wipes on a 120 bpm grid that every future spot can reuse.",
@@ -197,7 +197,7 @@ window.PORTFOLIO = {
       poster: "media/stack/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#c9b8f0",
+      color: "#e7ddf7",
       summary: "Product UI animation showing how savings pots stack up, cut for app-store previews and paid social.",
       description: [
         "Springs, not keyframes: every card uses the same physics settings as the app, so the ad feels like the product."
@@ -218,7 +218,7 @@ window.PORTFOLIO = {
       poster: "media/tideline/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#0f2a2e",
+      color: "#0c2c31",
       summary: "Opening titles for a festival about coastlines, built from forty contour lines that breathe like tide.",
       description: [
         "The festival's theme was change you can only see over time. The titles move slowly on purpose: each line is offset by a few frames, so the whole field drifts like water.",
@@ -242,7 +242,7 @@ window.PORTFOLIO = {
       poster: "media/lineup-reveal/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#0b0b12",
+      color: "#06070a",
       summary: "Countdown and lineup reveal for a summer festival, posted as a three-part Story sequence.",
       description: [
         "A strobing countdown that hands over to the lineup poster. Built so names could be swapped the night before the announcement without re-rendering the whole piece."
@@ -262,7 +262,7 @@ window.PORTFOLIO = {
       poster: "media/halftone-weather/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#c7d3e0",
+      color: "#d7dfea",
       summary: "Explainer system that turns pressure maps into halftone patterns for a weather app's new forecasts.",
       description: [
         "Weather data is noisy, so the visual language is calm: one grid of dots that grows and shrinks with pressure and wind. The same grid became the app's loading states."
@@ -282,10 +282,10 @@ window.PORTFOLIO = {
       poster: "media/orbit/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#1c1e22",
+      color: "#26282b",
       summary: "Launch teaser for an e-bike hub motor, told entirely through a rotating point cloud.",
       description: [
-        "The product wasn't ready to be shown, so the teaser shows how it moves instead. A point cloud of the motor's torque curve orbits the camera for eight seconds."
+        "The product wasn't ready to be shown, so the teaser shows how it moves instead: a chrome point cloud turning on a studio turntable, lit by the brand's lime."
       ],
       role: "3D, animation",
       tools: ["Houdini", "Redshift"],
@@ -302,10 +302,10 @@ window.PORTFOLIO = {
       poster: "media/ribbon/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#16202e",
+      color: "#1a2734",
       summary: "A study in loops: one ribbon, one twist, no cuts.",
       description: [
-        "A personal experiment in making a perfect loop without hiding the seam. Everything is driven by a single sine wave."
+        "A personal experiment in making a perfect loop without hiding the seam: one ribbon tied in a trefoil knot, turning once every eight seconds."
       ],
       role: "Everything",
       tools: ["Blender"],
@@ -322,7 +322,7 @@ window.PORTFOLIO = {
       poster: "media/blocktown/poster.jpg",
       duration: "0:08",
       fps: 30,
-      color: "#e9dcc6",
+      color: "#ece0cc",
       summary: "Isometric explainer about same-day delivery, from warehouse to doorstep in one continuous shot.",
       description: [
         "One camera move, no cuts. The city rises and falls around the parcel so the viewer never loses track of it."
