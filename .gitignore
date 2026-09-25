@@ -1,3 +1,4 @@
 tools/new-projects.txt
 .DS_Store
 Thumbs.db
+tools/.encode-lock/

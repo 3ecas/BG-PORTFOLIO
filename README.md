@@ -65,7 +65,7 @@ bash tools/encode.sh ~/Desktop/"videos portfolio"          # every video in the 
 bash tools/encode.sh ~/Renders/Halden_Ident_v12.mov halden-ident
 ```
 
-Link names come from file names. Two videos with the same file name in different folders (say `Halden/final.mov` and `Mercury/final.mov`) get their folder's name in front: `halden-final`, `mercury-final`. A new video never takes over a project folder made from a different video; it gets its own name instead. When the script can't be sure a folder came from the same video, it makes a new folder rather than overwrite one, so at worst you see an extra project to delete. Each project folder gets a small hidden `.encoded` note recording which master it was made from (checksums of its file and folder names, its size and date, never its location), so re-running only encodes new or changed videos. The site ignores the note; keeping it with the folder, including on GitHub, lets a fresh copy of your site skip those videos too. `tools/new-projects.txt` keeps growing, with a heading for each run: the newest blocks are at the bottom.
+Link names come from file names. Two videos with the same file name in different folders (say `Halden/final.mov` and `Mercury/final.mov`) get their folder's name in front: `halden-final`, `mercury-final`. A new video never takes over a project folder made from a different video; it gets its own name instead. When the script can't be sure a folder came from the same video, it makes a new folder rather than overwrite one, so at worst you see an extra project to delete. Each project folder gets a small hidden `.encoded` note recording which master it was made from (checksums of its file name and folder path, its size and date, never the location itself), so re-running only encodes new or changed videos. The site ignores the note; keeping it with the folder, including on GitHub, lets a fresh copy of your site skip those videos too. `tools/new-projects.txt` keeps growing, with a heading for each run: the newest blocks are at the bottom.
 
 For each video it creates `media/<slug>/` containing:
 
@@ -121,7 +121,7 @@ GitHub rejects single files over 100 MB, and Pages sites should stay under 1 GB 
 
 - Put a full URL in `video`, e.g. a file on Cloudflare R2, Bunny or S3 (`video: "https://cdn.example.com/reel.mp4"`).
 - Set `vimeo` or `youtube` to the video's ID or just paste its link (unlisted Vimeo links work too). When set, the viewer embeds that player instead of `video`, and your hover preview still comes from `preview`.
-- Keep `preview` and `poster` in this repo either way, so the grid stays fast.
+- Keep `preview` and `poster` in this repo either way, so the grid stays fast. You can delete that project's `video.mp4`: re-running the encoder won't bring it back.
 
 ## Publishing on GitHub Pages
 

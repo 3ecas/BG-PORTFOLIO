@@ -90,6 +90,18 @@ else
 fi
 if [ ${#FILES[@]} -eq 0 ]; then echo "No video files found." >&2; exit 1; fi
 
+# One run at a time: two runs would write into the same folders.
+LOCK="$ROOT/tools/.encode-lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  if [ -f "$LOCK/pid" ] && kill -0 "$(cat "$LOCK/pid" 2>/dev/null)" 2>/dev/null; then
+    echo "Another encode is already running for this site. Let it finish (or stop it), then run this again." >&2; exit 1
+  fi
+  rm -rf "$LOCK"; mkdir "$LOCK"
+fi
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT
+if ! { : >> "$LIST"; } 2>/dev/null; then echo "Can't write to tools/new-projects.txt. Close it if it is open in another app, then try again." >&2; exit 1; fi
+
 # ---- Link names ------------------------------------------------------------
 # First, each master gets back the folder it was encoded into before: the same
 # file (name, size and date, wherever it is now), or a new export with the same
@@ -219,7 +231,7 @@ $HEADING
 $BLOCK"; fi
 }
 add_block() {
-  printf '%s\n' "$BLOCK" >> "$LIST"
+  printf '%s\n' "$BLOCK" >> "$LIST" || return 1
   if [ -z "$RUN_TEXT" ]; then RUN_TEXT="${BLOCK#?}"; else RUN_TEXT="$RUN_TEXT
 $BLOCK"; fi
 }
@@ -315,7 +327,7 @@ same_shape() {
   [ $# -eq 5 ] && [ "$4" = "$DURATION" ] && [ "$5" = "${FPS:-25}" ] \
     && awk -v a="$1" -v b="$2" -v c="$W" -v d="$H" 'BEGIN { if (b <= 0 || d <= 0 || c <= 0) exit 1; r = (a / b) / (c / d); exit !(r > 0.99 && r < 1.01) }'
 }
-skip() { echo "• $1 already encoded in media/$2 (FORCE=1 to redo)"; SKIPPED=$((SKIPPED + 1)); }
+skip() { echo "• $1 already encoded in media/$2 (FORCE=1 to redo)${3:-}"; SKIPPED=$((SKIPPED + 1)); }
 
 # ---- Go --------------------------------------------------------------------
 echo "Encoding ${#FILES[@]} video(s) into media/"
@@ -331,19 +343,30 @@ for IN in "${FILES[@]}"; do
     echo "✗ $BASE: no video stream found, skipped" >&2
     FAILED=$((FAILED + 1)); continue
   fi
+  # The master as it is now; if it changes while encoding, nothing is saved.
+  ID0="$(master_id "$IN")"
+  LINE="$(note_line "$IN")"
 
   # What the folder held: nothing, a shipped sample (no preview.mp4), a set from an
   # earlier run (.encoded), or a set made before .encoded notes existed.
   WAS=""; SAMPLE=0
   if [ -f "$OUTD/.encoded" ]; then
     WAS="$(head -n1 "$OUTD/.encoded" | tr -d '\r')"
-    if [ "$FORCE" != "1" ] && [ "$(echo "$WAS" | cut -d' ' -f1-3)" = "$(master_id "$IN")" ] && complete "$OUTD"; then
+    # video.mp4 may be gone on purpose (a film hosted on Vimeo or a CDN).
+    if [ "$FORCE" != "1" ] && [ "$(echo "$WAS" | cut -d' ' -f1-3)" = "$ID0" ] \
+       && [ -s "$OUTD/preview.mp4" ] && [ -s "$OUTD/poster.jpg" ]; then
       # Keep the note current (the master may have moved since).
-      LINE="$(note_line "$IN")"
       if [ "$LINE" != "$WAS" ]; then printf '%s\n' "$LINE" > "$OUTD/.encoded"; fi
-      skip "$BASE" "$SLUG"; continue
+      if [ -s "$OUTD/video.mp4" ]; then skip "$BASE" "$SLUG"; else skip "$BASE" "$SLUG" "; no video.mp4 there, which is fine for a film hosted elsewhere"; fi
+      continue
     fi
     WAS="${WAS#* | }"
+    # A save that was cut short: carry on as if it never started.
+    case "$WAS" in
+      "pending new") WAS="" ;;
+      "pending sample") WAS=""; SAMPLE=1 ;;
+      pending\ *) WAS="${WAS#pending }" ;;
+    esac
   elif [ -s "$OUTD/video.mp4" ] && [ ! -f "$OUTD/preview.mp4" ]; then
     SAMPLE=1
   elif complete "$OUTD"; then
@@ -354,7 +377,7 @@ for IN in "${FILES[@]}"; do
       WAS="$FORMAT $DURATION ${FPS:-25}"
       # A name you gave may hold a different video of the same length: re-encode.
       if [ "$FORCE" != "1" ] && [ -z "$SLUG_ARG" ]; then
-        note_line "$IN" > "$OUTD/.encoded"; skip "$BASE" "$SLUG"; continue
+        printf '%s\n' "$LINE" > "$OUTD/.encoded"; skip "$BASE" "$SLUG"; continue
       fi
     else
       WAS="$(echo "$OLD" | cut -d' ' -f3-)"
@@ -372,22 +395,29 @@ for IN in "${FILES[@]}"; do
     NOTE="NEW"
   fi
 
+  if [ "$(master_id "$IN")" != "$ID0" ]; then
+    echo "   ✗ $BASE: the file changed while it was being encoded (still exporting?). Run this again when it's done." >&2
+    drop_parts "$OUTD"; OUT_NOW=""; FAILED=$((FAILED + 1)); continue
+  fi
+
   # Swap the new files in, add the block and write .encoded as one step, with stop
   # signals held off for those few milliseconds: a finished video always has its block.
+  # Until .encoded is written, a "pending" note marks the folder as unfinished, so a
+  # save that fails half way is redone next time, never mistaken for a finished set.
   make_block "$SLUG" "$BASE" "$NOTE" "$OUTD/poster.part.jpg"
-  LINE="$(note_line "$IN")"
+  if [ "$SAMPLE" = 1 ]; then PREV="sample"; else PREV="${WAS:-new}"; fi
+  PENDING="$(cks "$(basename "$IN")") 0 0 $(cks "$(dir_of "$IN")") | pending $PREV"
   SAVED=0
   trap '' INT TERM HUP
-  if mv -f "$OUTD/preview.part.mp4" "$OUTD/preview.mp4" && mv -f "$OUTD/poster.part.jpg" "$OUTD/poster.jpg" \
-     && mv -f "$OUTD/video.part.mp4" "$OUTD/video.mp4"; then
+  if printf '%s\n' "$PENDING" > "$OUTD/.encoded" \
+     && mv -f "$OUTD/video.part.mp4" "$OUTD/video.mp4" && mv -f "$OUTD/poster.part.jpg" "$OUTD/poster.jpg" \
+     && mv -f "$OUTD/preview.part.mp4" "$OUTD/preview.mp4"; then
     OUT_NOW=""
-    add_block
-    printf '%s\n' "$LINE" > "$OUTD/.encoded"
-    SAVED=1
+    if add_block && printf '%s\n' "$LINE" > "$OUTD/.encoded"; then SAVED=1; fi
   fi
   trap 'on_stop 130' INT; trap 'on_stop 143' TERM; trap 'on_stop 129' HUP
   if [ "$SAVED" = 0 ]; then
-    echo "   ✗ $BASE: could not save the files in media/$SLUG" >&2
+    echo "   ✗ $BASE: could not save the files in media/$SLUG (is one of them open in another app?). Run this again." >&2
     drop_parts "$OUTD"; OUT_NOW=""; FAILED=$((FAILED + 1)); continue
   fi
   echo "   saved in media/$SLUG ($(du -h "$OUTD/video.mp4" | cut -f1 | tr -d ' '))"
