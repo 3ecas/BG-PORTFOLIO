@@ -34,13 +34,13 @@ The page works like a composition on a timeline. Your scroll position is a playh
 You only do steps 1–2 once.
 
 1. **Install ffmpeg.** On a Mac: install [Homebrew](https://brew.sh), then run `brew install ffmpeg` in Terminal. On Windows: run `winget install Gyan.FFmpeg` in PowerShell, then install [Git for Windows](https://git-scm.com/download/win), which includes **Git Bash**.
-2. **Get your site on your computer.** On your repository's page on GitHub, click **Code → Download ZIP** and unzip it, or open it with GitHub Desktop.
+2. **Get your site on your computer.** On your repository's page on GitHub, click **Code → Download ZIP** and unzip it, or open it with GitHub Desktop. (Starting from someone else's copy of this template? First click **Use this template → Create a new repository**, or **Fork**, so you have your own.)
 3. **Open a terminal in the site folder.** On a Mac, right-click the folder and choose **New Terminal at Folder**. On Windows, right-click the folder and choose **Open Git Bash here**.
 4. **Encode your whole videos folder in one go.** Type `bash tools/encode.sh `, then drag your videos folder onto the terminal window so its path is filled in, and press Enter:
    ```bash
    bash tools/encode.sh "/Users/you/Desktop/videos portfolio"
    ```
-   Every video inside (MOV, MP4, ProRes…) becomes a web-ready set in `media/<name>/`. A ready-made block for each one is saved in `tools/new-projects.txt`. Run it again after adding more videos: the ones already done are skipped.
+   Every video inside (MOV, MP4, ProRes…) becomes a web-ready set in `media/<name>/`. A ready-made block for each one is saved in `tools/new-projects.txt`. Run it again after adding more videos: the ones already done are skipped, and the new ones are marked `// NEW` in the list. Press Ctrl-C to stop; running the same command again carries on.
 5. **Describe your projects.** Open `content.js` in a code editor such as [VS Code](https://code.visualstudio.com) (free). Don't use TextEdit or Word, which turn `"` into curly quotes and break the file. Delete the sample projects and paste in the blocks from `tools/new-projects.txt`. For each project, fill in the title, client, categories, summary and so on.
 6. **Pick your highlights and reel.** Put your best slugs in `highlights`. Encode your showreel with its own name, for example `bash tools/encode.sh ~/Renders/showreel.mov my-showreel`, but don't paste its block into the projects. Instead, in `content.js` under `hero.reel`:
    - set `video: "media/my-showreel/video.mp4"` and `poster: "media/my-showreel/poster.jpg"`, and copy `duration` and `fps` from its block;
@@ -107,7 +107,7 @@ POSTER_AT=4 CRF=20 bash tools/encode.sh ~/Desktop/"videos portfolio"
 }
 ```
 
-Only `title`, `format` and `video` (or `vimeo` / `youtube`) are required. Projects appear in the grid in the order you list them. Set `hidden: true` to keep a project in the file but off the site. Each `slug` must be unique and must not be `top`, `highlights`, `work`, `about` or `contact`, because those are the page's own sections.
+Only `title`, `format` and `video` (or `vimeo` / `youtube`) are required. Projects appear in the grid in the order you list them. Set `hidden: true` to keep a project in the file but off the site. Each `slug` must be unique. The page uses `top`, `highlights`, `work`, `about`, `contact`, `main`, `nav`, `menu`, `rail`, `footer`, `viewer`, `grid`, `index`, `marquee` and `showreel` itself, so a slug with one of those names gets `-project` added.
 
 **Selected work** uses the `highlights` list of slugs, in that order. If that list is empty, it uses every project marked `featured: true`.
 

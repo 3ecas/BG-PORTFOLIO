@@ -13,8 +13,9 @@
 #   poster.jpg   still frame shown before anything plays
 #
 # A ready-to-paste content.js block for every video in the run is printed and
-# saved in tools/new-projects.txt. Videos already encoded from the same master
-# are skipped (their blocks are still listed). Set FORCE=1 to redo them.
+# saved in tools/new-projects.txt; new ones are marked NEW. Videos already
+# encoded from the same master are skipped, even if you moved the folder.
+# Set FORCE=1 to redo them. Ctrl-C stops the run; run it again to continue.
 #
 # Options (environment variables, put them before the command):
 #   POSTER_AT=2.5       seconds into the clip for the poster frame   (default 2)
@@ -33,7 +34,7 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^[^#]/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 if [ $# -lt 1 ]; then usage; exit 1; fi
 
 command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg not found. Install it first (macOS: brew install ffmpeg)." >&2; exit 1; }
@@ -58,11 +59,23 @@ is_video() {
   esac
 }
 abspath() { (cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd)" "$(basename "$1")"); }
+filesize() { wc -c < "$1" | tr -d ' '; }
 source_of() { if [ -f "$MANIFEST" ]; then awk -F '\t' -v s="$1" '$1 == s { print $2; exit }' "$MANIFEST"; fi; }
+size_of() { if [ -f "$MANIFEST" ]; then awk -F '\t' -v s="$1" '$1 == s { print $3; exit }' "$MANIFEST"; fi; }
 remember() {
   local tmp="$MANIFEST.tmp"
-  { if [ -f "$MANIFEST" ]; then awk -F '\t' -v s="$1" '$1 != s' "$MANIFEST"; fi; printf '%s\t%s\n' "$1" "$2"; } > "$tmp"
+  { if [ -f "$MANIFEST" ]; then awk -F '\t' -v s="$1" '$1 != s' "$MANIFEST"; fi; printf '%s\t%s\t%s\n' "$1" "$2" "$3"; } > "$tmp"
   mv -f "$tmp" "$MANIFEST"
+}
+# Did media/<slug> come from this master? The same file (under any spelling), or the
+# recorded file is gone and one with the same name and size is here (a moved folder).
+same_master() {
+  local slug="$1" src="$2" rec
+  rec="$(source_of "$slug")"
+  [ -n "$rec" ] || return 1
+  [ "$rec" = "$src" ] && return 0
+  if [ -e "$rec" ]; then [ "$rec" -ef "$src" ]; return; fi
+  [ "$(basename "$rec")" = "$(basename "$src")" ] && [ -n "$(size_of "$slug")" ] && [ "$(size_of "$slug")" = "$(filesize "$src")" ]
 }
 
 # ---- Collect inputs: files, or every video inside folders ------------------
@@ -92,6 +105,9 @@ DONE=0
 SKIPPED=0
 FAILED=0
 : > "$LIST.tmp"
+# ffmpeg handles Ctrl-C itself and exits normally, so without this bash would carry on with the next video.
+PART_NOW=""
+trap 'echo; echo "Stopped. Run the same command again to pick up where it left off." >&2; rm -f "$LIST.tmp" ${PART_NOW:+"$PART_NOW"}; exit 130' INT TERM
 
 # ---- Read a master's size, frame rate, length and orientation ---------------
 probe_one() { ffprobe -v error -select_streams v:0 -show_entries "$2" -of default=nw=1:nk=1 "$1" 2>/dev/null | tr -d '\r' | head -n1 || true; }
@@ -118,11 +134,12 @@ probe_master() {
 }
 
 write_block() {
-  local SLUG="$1" BASE="$2" OUT="$ROOT/media/$1"
+  local SLUG="$1" BASE="$2" NOTE="$3" OUT="$ROOT/media/$1"
   local COLOR TITLE
   COLOR="$(ffmpeg -hide_banner -loglevel error -i "$OUT/poster.jpg" -vf scale=1:1 -f rawvideo -pix_fmt rgb24 - 2>/dev/null | od -An -tx1 | tr -d ' \n' | cut -c1-6 || true)"
   TITLE="$(echo "$BASE" | sed -E 's/[_-]+/ /g; s/ +v[0-9]+$//; s/^ +//; s/ +$//' | sed 's/\\/\\\\/g; s/"/\\"/g')"
   cat >> "$LIST.tmp" <<SNIPPET
+    // $NOTE
     {
       slug: "$SLUG",
       title: "$TITLE",
@@ -149,6 +166,7 @@ encode_one() {
   local IN="$1" SLUG="$2" BASE="$3"
   local OUT="$ROOT/media/$SLUG"
   local PART="$OUT/video.part.mp4"
+  PART_NOW="$PART"
 
   # Keep the poster and preview inside short clips.
   local P_AT P_START FIT_FULL FIT_PREVIEW FIT_POSTER
@@ -184,6 +202,15 @@ encode_one() {
     "$OUT/preview.mp4"; then
     echo "   ✗ $BASE: the preview could not be made" >&2; rm -f "$PART"; return 1
   fi
+  if [ "$(filesize "$OUT/preview.mp4")" -lt 2048 ]; then
+    ffmpeg -hide_banner -loglevel error -y -t "$PREVIEW_LEN" -i "$IN" -map 0:v:0 \
+      -vf "$FIT_PREVIEW,format=yuv420p" \
+      -c:v libx264 -preset slow -crf 28 -profile:v high -movflags +faststart -an \
+      "$OUT/preview.mp4" 2>/dev/null || true
+  fi
+  if [ "$(filesize "$OUT/preview.mp4")" -lt 2048 ]; then
+    echo "   ✗ $BASE: the preview came out empty (try PREVIEW_START=0)" >&2; rm -f "$PART"; return 1
+  fi
   echo "   preview.mp4 ✓"
 
   rm -f "$OUT/poster.jpg"
@@ -195,7 +222,7 @@ encode_one() {
       -vf "$FIT_POSTER" -q:v 3 "$OUT/poster.jpg" 2>/dev/null || true
   fi
   if [ ! -s "$OUT/poster.jpg" ]; then
-    echo "   ✗ $BASE: could not grab a poster frame (try POSTER_AT=0)" >&2; rm -f "$PART"; return 1
+    echo "   ✗ $BASE: could not grab a poster frame; the file may be damaged" >&2; rm -f "$PART"; return 1
   fi
   echo "   poster.jpg ✓"
 
@@ -220,8 +247,7 @@ for IN in "${FILES[@]}"; do
   CANDIDATE="$SLUG"; N=2
   while :; do
     case "$USED" in *" $CANDIDATE "*) CANDIDATE="$SLUG-$N"; N=$((N + 1)); continue ;; esac
-    OWNER="$(source_of "$CANDIDATE")"
-    if [ -z "$SLUG_ARG" ] && [ -n "$OWNER" ] && [ "$OWNER" != "$SRC" ]; then CANDIDATE="$SLUG-$N"; N=$((N + 1)); continue; fi
+    if [ -z "$SLUG_ARG" ] && [ -n "$(source_of "$CANDIDATE")" ] && ! same_master "$CANDIDATE" "$SRC"; then CANDIDATE="$SLUG-$N"; N=$((N + 1)); continue; fi
     break
   done
   SLUG="$CANDIDATE"; USED="$USED$SLUG "
@@ -232,16 +258,17 @@ for IN in "${FILES[@]}"; do
   fi
 
   OUTD="$ROOT/media/$SLUG"
-  if [ "$FORCE" != "1" ] && [ "$(source_of "$SLUG")" = "$SRC" ] \
-     && [ -s "$OUTD/video.mp4" ] && [ -s "$OUTD/preview.mp4" ] && [ -s "$OUTD/poster.jpg" ] && [ "$OUTD/video.mp4" -nt "$IN" ]; then
+  if [ "$FORCE" != "1" ] && same_master "$SLUG" "$SRC" \
+     && [ -s "$OUTD/video.mp4" ] && [ -s "$OUTD/preview.mp4" ] && [ -s "$OUTD/poster.jpg" ] && [ ! "$IN" -nt "$OUTD/video.mp4" ]; then
     echo "• $BASE already encoded in media/$SLUG (FORCE=1 to redo)"
-    write_block "$SLUG" "$BASE"
+    remember "$SLUG" "$SRC" "$(filesize "$IN")"
+    write_block "$SLUG" "$BASE" "Encoded in an earlier run: skip this one if it is already in content.js"
     SKIPPED=$((SKIPPED + 1))
     continue
   fi
   if encode_one "$IN" "$SLUG" "$BASE"; then
-    remember "$SLUG" "$SRC"
-    write_block "$SLUG" "$BASE"
+    remember "$SLUG" "$SRC" "$(filesize "$IN")"
+    write_block "$SLUG" "$BASE" "NEW"
     DONE=$((DONE + 1))
   else
     FAILED=$((FAILED + 1))
@@ -253,7 +280,12 @@ if [ -s "$LIST.tmp" ]; then
   echo "────────────────────────────────────────────────────────────"
   cat "$LIST"
   echo "────────────────────────────────────────────────────────────"
-  echo "Paste the blocks above into the projects list in content.js."
+  if [ "$SKIPPED" -gt 0 ]; then
+    echo "Paste the blocks marked NEW into the projects list in content.js."
+    echo "The others were encoded in an earlier run and may already be there."
+  else
+    echo "Paste the blocks above into the projects list in content.js."
+  fi
   echo "They are also saved in tools/new-projects.txt."
 else
   rm -f "$LIST.tmp"

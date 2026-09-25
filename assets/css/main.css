@@ -449,7 +449,7 @@ svg { display: block; }
      The slot is never narrower than a two-line caption, and the caption can't widen the clip. */
   --clip-w: min(calc(var(--hl-h) * var(--hs, 1) * var(--ar, 1.7778)), 76vw);
   flex: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-content: start; scroll-snap-align: start;
-  width: max(var(--clip-w), min(18rem, 76vw));
+  width: max(var(--clip-w), min(22rem, 76vw));
 }
 .hl__item .media { width: var(--clip-w); max-width: 100%; }
 /* A fixed-height frame keeps every clip's bottom edge, and so every caption, on one line.
@@ -553,7 +553,7 @@ svg { display: block; }
 .tile__dur { color: var(--ink-3); }
 .tile__sub { color: var(--ink-3); grid-column: 1 / -1; display: flex; gap: .7em; white-space: nowrap; min-width: 0; }
 .tile__sub span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.tile__sub span:last-child { flex: none; }
+.tile__sub span + span { flex: none; }
 .tile:hover .tile__title { color: var(--accent-ink); }
 .tile__title, .tile__sub { transition: color .3s; }
 

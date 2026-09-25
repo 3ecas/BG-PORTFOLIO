@@ -432,11 +432,17 @@
       if (y > lastY + 6 && y > 240) nav.classList.add('is-hidden');
       else if (y < lastY - 6 || y < 240) {
         // On phones the stuck filter bar already takes the top: don't stack the nav on it.
+        // The bar's natural (unstuck) position comes from the heading before it, so this
+        // doesn't depend on whether the nav is showing.
         const ctl = $('.work__controls');
         const work = $('#work');
-        const inGrid = mqPhone.matches && ctl && work && y >= 240
-          && ctl.getBoundingClientRect().top <= 1 && work.getBoundingClientRect().bottom > nav.offsetHeight + ctl.offsetHeight;
-        if (!inGrid) nav.classList.remove('is-hidden');
+        let inGrid = false;
+        if (mqPhone.matches && ctl && work && y >= 240) {
+          const head = ctl.previousElementSibling;
+          const natural = head ? head.getBoundingClientRect().bottom + parseFloat(getComputedStyle(ctl).marginTop) : Infinity;
+          inGrid = natural <= nav.offsetHeight && work.getBoundingClientRect().bottom > nav.offsetHeight + ctl.offsetHeight;
+        }
+        nav.classList.toggle('is-hidden', inGrid);
       }
       lastY = y;
     };
@@ -738,7 +744,7 @@
     const measure = () => {
       sec.classList.add('is-pinned');
       const stickyH = sticky.offsetHeight;
-      HL.pinned = S.vw >= 900 && stickyH >= 560 && !reduced;
+      HL.pinned = S.vw >= 900 && stickyH >= 640 && !reduced;
       sec.classList.toggle('is-pinned', HL.pinned);
       if (HL.pinned) {
         track.style.transform = 'none';
@@ -1080,8 +1086,16 @@
       }
     };
 
+    // Keyboard focus on a half-hidden chip scrolls just the chip row, never the page.
     $('.chips', sec).addEventListener('focusin', (e) => {
-      if (e.target.matches('.chip')) e.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const row = e.currentTarget;
+      const c = e.target.closest('.chip');
+      if (!c || !c.matches(':focus-visible') || row.scrollWidth <= row.clientWidth) return;
+      const pad = parseFloat(getComputedStyle(row).scrollPaddingInlineStart) || 0;
+      const cr = c.getBoundingClientRect();
+      const rr = row.getBoundingClientRect();
+      if (cr.left - pad < rr.left) row.scrollLeft -= rr.left - cr.left + pad;
+      else if (cr.right + pad > rr.right) row.scrollLeft += cr.right + pad - rr.right;
     });
     sec.addEventListener('click', (e) => {
       const chip = e.target.closest('[data-cat]');
@@ -1127,11 +1141,13 @@
           el._inBand = en.isIntersecting;
           if (en.isIntersecting && autoplayOK()) {
             // A fling passes straight through: only tiles that stay a moment start loading.
-            el._bandT = setTimeout(() => {
-              if (!autoplayOK() || Viewer.current || !el._inBand) return;
+            const start = () => {
+              if (!autoplayOK() || !el._inBand) return;
+              if (Viewer.current) { el._bandT = setTimeout(start, 300); return; }
               Media.play(v); playing.add(m);
               if (playing.size > 2) { const first = playing.values().next().value; Media.pause($('video', first)); playing.delete(first); }
-            }, 300);
+            };
+            el._bandT = setTimeout(start, 300);
           } else { Media.pause(v); playing.delete(m); }
         });
       }, { rootMargin: '-38% 0px -38% 0px' });
@@ -1844,12 +1860,11 @@
         this.scroller.scrollTop = 0;
         document.title = baseTitle;
         if (autoplayOK()) {
-          (this.paused || []).forEach((v) => {
-            const hl = v.closest('.hl__link .media');
-            const tile = v.closest('.tile');
-            const back = hl ? hl._inView : tile ? tile._inBand : v.closest('.hero__media') && $('#top')._visible;
-            if (back) Media.play(v);
-          });
+          // Resync from what is on screen now, including loops that came into view meanwhile.
+          const hv = $('.hero__media video');
+          if (hv && $('#top')._visible) Media.play(hv);
+          $$('.hl__link .media').forEach((m) => { if (m._inView) Media.play($('video', m)); });
+          (this.paused || []).forEach((v) => { const t = v.closest('.tile'); if (t && t._inBand) Media.play(v); });
         }
         this.paused = [];
         const back = this.returnFocus && document.contains(this.returnFocus) ? this.returnFocus : null;

@@ -76,8 +76,10 @@ window.PORTFOLIO = {
      categories:  filter chips are built from these automatically
      links:       optional [{ label: "Case study", url: "https://..." }]
      hidden:      true keeps a project in the file but off the site
-     slug:        the link name (yoursite/#slug); must be unique and not one of
-                  top, highlights, work, about, contact
+     slug:        the link name (yoursite/#slug); must be unique. The page uses
+                  top, highlights, work, about, contact, main, nav, menu, rail,
+                  footer, viewer, grid, index, marquee and showreel itself, so
+                  those get "-project" added
      ------------------------------------------------------------------------ */
   projects: [
     {
