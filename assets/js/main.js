@@ -367,6 +367,7 @@
       const hv = $('.hero__media video');
       if (hv && $('#top')._visible) Media.play(hv);
       $$('.hl__link .media').forEach((m) => { if (m._inView) Media.play($('video', m)); });
+      if (W.rebandPreviews) W.rebandPreviews();
     }
     wake();
   }
@@ -744,7 +745,7 @@
     const measure = () => {
       sec.classList.add('is-pinned');
       const stickyH = sticky.offsetHeight;
-      HL.pinned = S.vw >= 900 && stickyH >= 640 && !reduced;
+      HL.pinned = S.vw >= 900 && stickyH >= 580 && !reduced;
       sec.classList.toggle('is-pinned', HL.pinned);
       if (HL.pinned) {
         track.style.transform = 'none';
@@ -772,7 +773,8 @@
 
     // Keyboard users: tabbing to an item scrolls the page so the reel brings it into view.
     track.addEventListener('focusin', (e) => {
-      if (!HL.pinned) return;
+      // Mouse and touch also focus links on press; moving the reel then would pull the target away mid-click.
+      if (!HL.pinned || !e.target.matches(':focus-visible')) return;
       const item = e.target.closest('.hl__item, .hl__end');
       if (!item) return;
       const padL = parseFloat(getComputedStyle(track).paddingLeft) || 0;
@@ -1005,7 +1007,7 @@
       const on = matches(t.p);
       const wasOut = t.el.classList.contains('is-out');
       if (on && wasOut) t.entering = true;
-      if (!on) t.el.classList.add('is-out');
+      if (!on) { t.el.classList.add('is-out'); Media.pause($('video', t.el)); }
     });
     // Tiles coming back appear in place instead of flying in from their old spot.
     W.tiles.filter((t) => t.entering).forEach((t) => t.el.classList.add('no-trans'));
@@ -1086,6 +1088,18 @@
       }
     };
 
+    // Tab onto a control in the stuck bar: scroll-padding reserves the bar's own height, so the
+    // browser treats the control as hidden and scrolls the page. Undo that scroll.
+    let tabY = null;
+    addEventListener('keydown', (e) => {
+      if (e.key !== 'Tab') return;
+      const r = ctl.getBoundingClientRect();
+      tabY = r.top >= 0 && r.bottom <= innerHeight ? scrollY : null;
+      setTimeout(() => { tabY = null; });
+    }, true);
+    ctl.addEventListener('focusin', () => {
+      if (tabY !== null && Math.abs(scrollY - tabY) > 1) scrollTo({ top: tabY, behavior: 'instant' });
+    });
     // Keyboard focus on a half-hidden chip scrolls just the chip row, never the page.
     $('.chips', sec).addEventListener('focusin', (e) => {
       const row = e.currentTarget;
@@ -1139,10 +1153,10 @@
           const v = $('video', el);
           clearTimeout(el._bandT);
           el._inBand = en.isIntersecting;
-          if (en.isIntersecting && autoplayOK()) {
+          if (en.isIntersecting && autoplayOK() && !el.classList.contains('is-out')) {
             // A fling passes straight through: only tiles that stay a moment start loading.
             const start = () => {
-              if (!autoplayOK() || !el._inBand) return;
+              if (!autoplayOK() || !el._inBand || el.classList.contains('is-out')) return;
               if (Viewer.current) { el._bandT = setTimeout(start, 300); return; }
               Media.play(v); playing.add(m);
               if (playing.size > 2) { const first = playing.values().next().value; Media.pause($('video', first)); playing.delete(first); }
@@ -1152,6 +1166,8 @@
         });
       }, { rootMargin: '-38% 0px -38% 0px' });
       tiles.forEach((el) => band.observe(el));
+      // Observing again delivers the current state, so centred tiles restart after motion resumes.
+      W.rebandPreviews = () => tiles.forEach((el) => { band.unobserve(el); band.observe(el); });
     }
 
     // Preview progress lines + a gentle parallax inside each thumbnail.
@@ -1722,6 +1738,7 @@
   const Viewer = {
     isOpen: false,
     closing: false,
+    pendingRoute: false,
     pushed: false,
     ignorePop: false,
     current: null,
@@ -1864,13 +1881,15 @@
           const hv = $('.hero__media video');
           if (hv && $('#top')._visible) Media.play(hv);
           $$('.hl__link .media').forEach((m) => { if (m._inView) Media.play($('video', m)); });
-          (this.paused || []).forEach((v) => { const t = v.closest('.tile'); if (t && t._inBand) Media.play(v); });
+          (this.paused || []).forEach((v) => { const t = v.closest('.tile'); if (t && t._inBand && !t.classList.contains('is-out')) Media.play(v); });
         }
         this.paused = [];
         const back = this.returnFocus && document.contains(this.returnFocus) ? this.returnFocus : null;
         if (back) back.focus({ preventScroll: true });
         this.returnFocus = null;
         wake();
+        // Back/Forward pressed during the close animation: apply it now.
+        if (this.pendingRoute) { this.pendingRoute = false; route(false); }
       };
       const target = p ? this.originFor(p) : null;
       if (target && hasVT && !reduced && this.stage) {
@@ -2020,6 +2039,7 @@
 
   /* ---------- Router + global clicks ---------- */
   function route(initial) {
+    if (Viewer.closing) { Viewer.pendingRoute = true; return; }
     let h = '';
     try { h = decodeURIComponent(location.hash.slice(1)); } catch (e) { h = location.hash.slice(1); }
     const p = BY_SLUG.get(h) || (h === 'showreel' ? viewerReel() : null);

@@ -60,22 +60,38 @@ is_video() {
 }
 abspath() { (cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd)" "$(basename "$1")"); }
 filesize() { wc -c < "$1" | tr -d ' '; }
-source_of() { if [ -f "$MANIFEST" ]; then awk -F '\t' -v s="$1" '$1 == s { print $2; exit }' "$MANIFEST"; fi; }
-size_of() { if [ -f "$MANIFEST" ]; then awk -F '\t' -v s="$1" '$1 == s { print $3; exit }' "$MANIFEST"; fi; }
+# Content fingerprint: size plus a checksum of 1 MB from the middle of the file.
+# Recognises a master after it is moved, renamed or copied, and never mixes up two
+# different masters that share a name and size.
+fingerprint() {
+  local size; size="$(filesize "$1")"
+  printf '%s:%s' "$size" "$(dd if="$1" bs=65536 skip=$(( size / 131072 )) count=16 2>/dev/null | cksum | cut -d' ' -f1)"
+}
+# encoded.txt columns: slug, master path, fingerprint, listed (1 once a finished run has shown its block).
+col() { if [ -f "$MANIFEST" ]; then awk -F '\t' -v s="$1" -v c="$2" '$1 == s { print $c; exit }' "$MANIFEST"; fi; }
 remember() {
   local tmp="$MANIFEST.tmp"
-  { if [ -f "$MANIFEST" ]; then awk -F '\t' -v s="$1" '$1 != s' "$MANIFEST"; fi; printf '%s\t%s\t%s\n' "$1" "$2" "$3"; } > "$tmp"
+  { if [ -f "$MANIFEST" ]; then awk -F '\t' -v s="$1" '$1 != s' "$MANIFEST"; fi; printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4"; } > "$tmp"
   mv -f "$tmp" "$MANIFEST"
 }
-# Did media/<slug> come from this master? The same file (under any spelling), or the
-# recorded file is gone and one with the same name and size is here (a moved folder).
+mark_listed() {
+  [ -f "$MANIFEST" ] || return 0
+  awk -F '\t' -v OFS='\t' -v used="$USED" 'index(used, " " $1 " ") { $4 = 1 } { print }' "$MANIFEST" > "$MANIFEST.tmp" && mv -f "$MANIFEST.tmp" "$MANIFEST"
+}
+# Did media/<slug> come from this master (path $2, fingerprint $3)?
 same_master() {
-  local slug="$1" src="$2" rec
-  rec="$(source_of "$slug")"
+  local rec fp
+  rec="$(col "$1" 2)"
   [ -n "$rec" ] || return 1
-  [ "$rec" = "$src" ] && return 0
-  if [ -e "$rec" ]; then [ "$rec" -ef "$src" ]; return; fi
-  [ "$(basename "$rec")" = "$(basename "$src")" ] && [ -n "$(size_of "$slug")" ] && [ "$(size_of "$slug")" = "$(filesize "$src")" ]
+  [ "$rec" = "$2" ] && return 0
+  if [ -e "$rec" ] && [ "$rec" -ef "$2" ]; then return 0; fi
+  fp="$(col "$1" 3)"
+  case "$fp" in
+    *:*) [ "$fp" = "$3" ] ;;
+    # Lists from the previous version only stored the size: same name and size, original gone.
+    ?*) [ ! -e "$rec" ] && [ "$(basename "$rec")" = "$(basename "$2")" ] && [ "$fp" = "${3%%:*}" ] ;;
+    *) return 1 ;;
+  esac
 }
 
 # ---- Collect inputs: files, or every video inside folders ------------------
@@ -104,10 +120,24 @@ USED=" "
 DONE=0
 SKIPPED=0
 FAILED=0
+NEWN=0
 : > "$LIST.tmp"
-# ffmpeg handles Ctrl-C itself and exits normally, so without this bash would carry on with the next video.
+# ffmpeg handles Ctrl-C itself and exits normally, so without this bash would carry on
+# with the next video. Clean up first: after a closed terminal, writing a message fails.
 PART_NOW=""
-trap 'echo; echo "Stopped. Run the same command again to pick up where it left off." >&2; rm -f "$LIST.tmp" ${PART_NOW:+"$PART_NOW"}; exit 130' INT TERM
+on_stop() {
+  trap '' INT TERM HUP
+  rm -f "$LIST.tmp" ${PART_NOW:+"$PART_NOW"}
+  {
+    echo
+    if [ "$FORCE" = "1" ]; then echo "Stopped. With FORCE=1, running again starts over from the first video."
+    else echo "Stopped. Run the same command again to pick up where it left off."; fi
+  } >&2 2>/dev/null || true
+  exit "$1"
+}
+trap 'on_stop 130' INT
+trap 'on_stop 143' TERM
+trap 'on_stop 129' HUP
 
 # ---- Read a master's size, frame rate, length and orientation ---------------
 probe_one() { ffprobe -v error -select_streams v:0 -show_entries "$2" -of default=nw=1:nk=1 "$1" 2>/dev/null | tr -d '\r' | head -n1 || true; }
@@ -229,6 +259,7 @@ encode_one() {
   if ! mv -f "$PART" "$OUT/video.mp4"; then
     echo "   ✗ $BASE: could not save video.mp4" >&2; rm -f "$PART"; return 1
   fi
+  PART_NOW=""
   echo "   video.mp4 ✓ ($(du -h "$OUT/video.mp4" | cut -f1 | tr -d ' '))"
   echo
   return 0
@@ -237,20 +268,34 @@ encode_one() {
 for IN in "${FILES[@]}"; do
   BASE="$(basename "${IN%.*}")"
   SRC="$(abspath "$IN")"
+  FP="$(fingerprint "$IN")"
   SLUG="${SLUG_ARG:-$(slugify "$BASE")}"
   if [ -z "$SLUG" ]; then SLUG="project"; fi
   # The site uses these names for its own sections.
   case "$SLUG" in top|highlights|work|about|contact|main|nav|menu|rail|footer|viewer|grid|index|marquee|showreel) SLUG="$SLUG-project" ;; esac
 
-  # Reuse the folder this master was encoded into before; otherwise pick a free name.
-  # A folder made from a different master gets a new name, unless you chose the name yourself.
-  CANDIDATE="$SLUG"; N=2
-  while :; do
-    case "$USED" in *" $CANDIDATE "*) CANDIDATE="$SLUG-$N"; N=$((N + 1)); continue ;; esac
-    if [ -z "$SLUG_ARG" ] && [ -n "$(source_of "$CANDIDATE")" ] && ! same_master "$CANDIDATE" "$SRC"; then CANDIDATE="$SLUG-$N"; N=$((N + 1)); continue; fi
-    break
-  done
-  SLUG="$CANDIDATE"; USED="$USED$SLUG "
+  # A master encoded before keeps its folder, even if it was moved, renamed or copied.
+  REUSE=""
+  if [ -z "$SLUG_ARG" ] && [ -f "$MANIFEST" ]; then
+    while IFS="$(printf '\t')" read -r s _rest; do
+      case "$USED" in *" $s "*) continue ;; esac
+      if same_master "$s" "$SRC" "$FP"; then REUSE="$s"; break; fi
+    done < "$MANIFEST"
+  fi
+  if [ -n "$REUSE" ]; then
+    SLUG="$REUSE"
+  else
+    # Otherwise pick a free name: a folder made from a different master gets a new one,
+    # unless you chose the name yourself.
+    CANDIDATE="$SLUG"; N=2
+    while :; do
+      case "$USED" in *" $CANDIDATE "*) CANDIDATE="$SLUG-$N"; N=$((N + 1)); continue ;; esac
+      if [ -z "$SLUG_ARG" ] && [ -n "$(col "$CANDIDATE" 2)" ] && ! same_master "$CANDIDATE" "$SRC" "$FP"; then CANDIDATE="$SLUG-$N"; N=$((N + 1)); continue; fi
+      break
+    done
+    SLUG="$CANDIDATE"
+  fi
+  USED="$USED$SLUG "
 
   if ! probe_master "$IN"; then
     echo "✗ $BASE: no video stream found, skipped" >&2
@@ -258,17 +303,33 @@ for IN in "${FILES[@]}"; do
   fi
 
   OUTD="$ROOT/media/$SLUG"
-  if [ "$FORCE" != "1" ] && same_master "$SLUG" "$SRC" \
-     && [ -s "$OUTD/video.mp4" ] && [ -s "$OUTD/preview.mp4" ] && [ -s "$OUTD/poster.jpg" ] && [ ! "$IN" -nt "$OUTD/video.mp4" ]; then
+  KNOWN=0
+  if same_master "$SLUG" "$SRC" "$FP"; then KNOWN=1; fi
+  # "0" = encoded before, but no finished run has shown its block yet (a run stopped early).
+  SHOWN="$(col "$SLUG" 4)"
+  # Unchanged = same content as when it was encoded (older lists: master not newer than the video).
+  FP_REC="$(col "$SLUG" 3)"
+  UNCHANGED=0
+  case "$FP_REC" in
+    *:*) if [ "$FP_REC" = "$FP" ]; then UNCHANGED=1; fi ;;
+    *) if [ ! "$IN" -nt "$OUTD/video.mp4" ]; then UNCHANGED=1; fi ;;
+  esac
+  if [ "$FORCE" != "1" ] && [ "$KNOWN" = 1 ] && [ "$UNCHANGED" = 1 ] \
+     && [ -s "$OUTD/video.mp4" ] && [ -s "$OUTD/preview.mp4" ] && [ -s "$OUTD/poster.jpg" ]; then
     echo "• $BASE already encoded in media/$SLUG (FORCE=1 to redo)"
-    remember "$SLUG" "$SRC" "$(filesize "$IN")"
-    write_block "$SLUG" "$BASE" "Encoded in an earlier run: skip this one if it is already in content.js"
+    remember "$SLUG" "$SRC" "$FP" "${SHOWN:-1}"
+    if [ "$SHOWN" = "0" ]; then write_block "$SLUG" "$BASE" "NEW"; NEWN=$((NEWN + 1))
+    else write_block "$SLUG" "$BASE" "Encoded in an earlier run: skip this one if it is already in content.js"; fi
     SKIPPED=$((SKIPPED + 1))
     continue
   fi
   if encode_one "$IN" "$SLUG" "$BASE"; then
-    remember "$SLUG" "$SRC" "$(filesize "$IN")"
-    write_block "$SLUG" "$BASE" "NEW"
+    remember "$SLUG" "$SRC" "$FP" 0
+    if [ "$KNOWN" = 1 ] && [ "$SHOWN" != "0" ]; then
+      write_block "$SLUG" "$BASE" "Re-encoded with the same link name: skip this one if it is already in content.js"
+    else
+      write_block "$SLUG" "$BASE" "NEW"; NEWN=$((NEWN + 1))
+    fi
     DONE=$((DONE + 1))
   else
     FAILED=$((FAILED + 1))
@@ -280,7 +341,9 @@ if [ -s "$LIST.tmp" ]; then
   echo "────────────────────────────────────────────────────────────"
   cat "$LIST"
   echo "────────────────────────────────────────────────────────────"
-  if [ "$SKIPPED" -gt 0 ]; then
+  if [ "$NEWN" -eq 0 ]; then
+    echo "Nothing new to paste: every video here was already in an earlier list."
+  elif [ "$NEWN" -lt "$((DONE + SKIPPED))" ]; then
     echo "Paste the blocks marked NEW into the projects list in content.js."
     echo "The others were encoded in an earlier run and may already be there."
   else
@@ -290,5 +353,7 @@ if [ -s "$LIST.tmp" ]; then
 else
   rm -f "$LIST.tmp"
 fi
+# Everything listed above has now been shown once.
+mark_listed
 echo "Encoded: $DONE   Skipped: $SKIPPED   Failed: $FAILED"
 [ "$FAILED" -eq 0 ]

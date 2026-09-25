@@ -444,6 +444,12 @@ svg { display: block; }
   scroll-padding-inline: var(--gutter); scrollbar-width: none; padding-bottom: 8px;
 }
 .highlights:not(.is-pinned) .hl__track::-webkit-scrollbar { display: none; }
+/* Mouse users on short desktop windows get a thin scrollbar to reach every highlight. */
+@media (pointer: fine) {
+  .highlights:not(.is-pinned) .hl__track { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; padding-bottom: 14px; }
+  .highlights:not(.is-pinned) .hl__track::-webkit-scrollbar { display: block; height: 6px; }
+  .highlights:not(.is-pinned) .hl__track::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 3px; }
+}
 .hl__item {
   /* The clip's width follows its real ratio (--ar); landscape clips sit at 80% height (--hs).
      The slot is never narrower than a two-line caption, and the caption can't widen the clip. */
