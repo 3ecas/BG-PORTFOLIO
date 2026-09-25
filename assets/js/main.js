@@ -774,7 +774,7 @@
     // Keyboard users: tabbing to an item scrolls the page so the reel brings it into view.
     track.addEventListener('focusin', (e) => {
       // Mouse and touch also focus links on press; moving the reel then would pull the target away mid-click.
-      if (!HL.pinned || !e.target.matches(':focus-visible')) return;
+      if (!HL.pinned || Viewer.restoring || !e.target.matches(':focus-visible')) return;
       const item = e.target.closest('.hl__item, .hl__end');
       if (!item) return;
       const padL = parseFloat(getComputedStyle(track).paddingLeft) || 0;
@@ -1026,6 +1026,8 @@
     empty.hidden = shown.length > 0;
     const st = $('#work-status');
     if (st) st.textContent = `Showing ${shown.length} of ${PROJECTS.length} projects`;
+    // Touch: tiles that stayed in the centre band get no new intersection event.
+    if (W.rebandPreviews) W.rebandPreviews();
     requestRailMeasure();
   }
 
@@ -1097,8 +1099,11 @@
       tabY = r.top >= 0 && r.bottom <= innerHeight ? scrollY : null;
       setTimeout(() => { tabY = null; });
     }, true);
-    ctl.addEventListener('focusin', () => {
-      if (tabY !== null && Math.abs(scrollY - tabY) > 1) scrollTo({ top: tabY, behavior: 'instant' });
+    ctl.addEventListener('focusin', (e) => {
+      if (tabY === null || Math.abs(scrollY - tabY) <= 1) return;
+      const bottomAtTabY = e.target.getBoundingClientRect().bottom + (scrollY - tabY);
+      const railTop = $('#rail').getBoundingClientRect().top;
+      scrollTo({ top: tabY + Math.max(0, bottomAtTabY - railTop + 8), behavior: 'instant' });
     });
     // Keyboard focus on a half-hidden chip scrolls just the chip row, never the page.
     $('.chips', sec).addEventListener('focusin', (e) => {
@@ -1419,16 +1424,30 @@
       const p = clamp((e.clientX - r.left) / r.width, 0, 1);
       scrollTo({ top: p * RAIL.max, behavior: 'instant' });
     };
+    // Mouse: press and drag to scrub. Touch: a tap seeks, a sideways drag scrubs,
+    // and a vertical swipe starting on the bar still scrolls the page.
+    let pending = null;
+    let sx = 0;
+    let sy = 0;
     track.addEventListener('pointerdown', (e) => {
       if (e.target.closest('.rail__key')) return;
+      if (e.pointerType !== 'mouse') { pending = e.pointerId; sx = e.clientX; sy = e.clientY; return; }
       dragging = true;
       track.setPointerCapture(e.pointerId);
       seek(e);
     });
-    track.addEventListener('pointermove', (e) => { if (dragging) seek(e); });
-    const end = () => { dragging = false; };
-    track.addEventListener('pointerup', end);
-    track.addEventListener('pointercancel', end);
+    track.addEventListener('pointermove', (e) => {
+      if (pending === e.pointerId && Math.abs(e.clientX - sx) > 8 && Math.abs(e.clientX - sx) > Math.abs(e.clientY - sy)) {
+        pending = null; dragging = true;
+        track.setPointerCapture(e.pointerId);
+      }
+      if (dragging) seek(e);
+    });
+    track.addEventListener('pointerup', (e) => {
+      if (pending === e.pointerId && Math.abs(e.clientX - sx) < 8 && Math.abs(e.clientY - sy) < 8) seek(e);
+      pending = null; dragging = false;
+    });
+    track.addEventListener('pointercancel', () => { pending = null; dragging = false; });
 
     let lastTc = '';
     let lastP = -1;
@@ -1750,7 +1769,7 @@
       this.el.innerHTML = `
         <div class="viewer__bar">
           <button class="viewer__close mono" type="button" data-close>${ICON.close}<span>Close</span><kbd>Esc</kbd></button>
-          <p class="viewer__count mono"></p>
+          <p class="viewer__count mono" aria-live="polite" aria-atomic="true"></p>
           <div class="viewer__nav">
             <button type="button" data-step="-1" aria-label="Previous project">${ICON.prev}</button>
             <button type="button" data-step="1" aria-label="Next project">${ICON.next}</button>
@@ -1758,6 +1777,7 @@
         </div>
         <div class="viewer__scroll"><div class="viewer__content"></div></div>`;
       this.scroller = $('.viewer__scroll', this.el);
+      this.scroller.tabIndex = -1;
       this.content = $('.viewer__content', this.el);
       this.count = $('.viewer__count', this.el);
       this.navEl = $('.viewer__nav', this.el);
@@ -1777,7 +1797,10 @@
     },
     listFor(p) {
       if (p.isReel) return [p];
-      const f = filtered();
+      // Follow the order on screen: a sorted Index reorders its rows.
+      const f = W.view === 'index' && W.sort
+        ? $$('.index__row:not([hidden])', $('#index')).map((r) => BY_SLUG.get(r.dataset.slug))
+        : filtered();
       return f.includes(p) ? f : PROJECTS;
     },
     originFor(p) {
@@ -1809,6 +1832,8 @@
       document.title = `${p.title} — ${SITE.name || ''}`;
 
       if (wasOpen) {
+        // The focused link may have been re-rendered away: keep focus inside the dialog.
+        if (!this.el.contains(document.activeElement)) this.scroller.focus({ preventScroll: true });
         if (!reduced) this.content.animate([{ opacity: 0, transform: 'translateY(24px)' }, { opacity: 1, transform: 'none' }], { duration: 600, easing: 'cubic-bezier(.16,1,.3,1)' });
         return;
       }
@@ -1828,8 +1853,9 @@
         root.style.setProperty('--sbw', `${sbw}px`);
         root.classList.add('is-locked', 'is-viewer-open');
         ['#nav', '#main', '#footer', '#rail', '#menu', '.skip'].forEach((s) => { const n = $(s); if (n) n.inert = true; });
-        // Focus the dialog itself: Space then plays/pauses instead of pressing Close.
-        this.el.focus({ preventScroll: true });
+        // Focus the dialog's content: arrow/Page keys scroll it, and Space plays/pauses
+        // instead of pressing Close.
+        this.scroller.focus({ preventScroll: true });
         wake();
       };
       const from = origin && this.visible(origin) ? origin : null;
@@ -1885,7 +1911,7 @@
         }
         this.paused = [];
         const back = this.returnFocus && document.contains(this.returnFocus) ? this.returnFocus : null;
-        if (back) back.focus({ preventScroll: true });
+        if (back) { this.restoring = true; back.focus({ preventScroll: true }); this.restoring = false; }
         this.returnFocus = null;
         wake();
         // Back/Forward pressed during the close animation: apply it now.

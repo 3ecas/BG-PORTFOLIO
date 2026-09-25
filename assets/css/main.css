@@ -292,6 +292,8 @@ svg { display: block; }
   border-bottom-color: var(--line);
 }
 .nav.is-hidden { transform: translateY(-101%); }
+/* Tabbing into the hidden nav brings it back. */
+.nav.is-hidden:has(:focus-visible) { transform: none; }
 .nav__inner {
   height: var(--nav-h); display: flex; align-items: center; gap: 28px;
   padding-inline: var(--gutter);
@@ -690,7 +692,7 @@ svg { display: block; }
 .is-still .rail__motion .i-play { display: block; }
 .rail__tc span { color: var(--ink-3); }
 .rail__track {
-  position: relative; flex: 1; height: 100%; cursor: ew-resize; touch-action: none;
+  position: relative; flex: 1; height: 100%; cursor: ew-resize; touch-action: pan-y;
   margin-right: 52px; /* room for the last keyframe's label */
   background:
     repeating-linear-gradient(90deg, var(--line-strong) 0 1px, transparent 1px 100%) 0 100% / 10% 9px no-repeat repeat-x,

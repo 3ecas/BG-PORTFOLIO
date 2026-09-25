@@ -40,9 +40,11 @@ You only do steps 1–2 once.
    ```bash
    bash tools/encode.sh "/Users/you/Desktop/videos portfolio"
    ```
-   Every video inside (MOV, MP4, ProRes…) becomes a web-ready set in `media/<name>/`. A ready-made block for each one is saved in `tools/new-projects.txt`. Run it again after adding more videos: the ones already done are skipped, and the new ones are marked `// NEW` in the list. Press Ctrl-C to stop; running the same command again carries on.
-5. **Describe your projects.** Open `content.js` in a code editor such as [VS Code](https://code.visualstudio.com) (free). Don't use TextEdit or Word, which turn `"` into curly quotes and break the file. Delete the sample projects and paste in the blocks from `tools/new-projects.txt`. For each project, fill in the title, client, categories, summary and so on.
-6. **Pick your highlights and reel.** Put your best slugs in `highlights`. Encode your showreel with its own name, for example `bash tools/encode.sh ~/Renders/showreel.mov my-showreel`, but don't paste its block into the projects. Instead, in `content.js` under `hero.reel`:
+   Every video inside (MOV, MP4, ProRes…) becomes a web-ready set in `media/<name>/`, named after its file: `Halden Ident.mov` becomes `media/halden-ident/`. As each video finishes, a ready-made block for it is added to the end of `tools/new-projects.txt`, marked `// NEW`. Run the same command again after adding more videos: the ones already done are skipped, and only the new ones get blocks, under a new heading. Press Ctrl-C to stop at any time; running the command again carries on.
+
+   Renaming a master makes it a new project with a new folder, so pick your file names before you encode. If you export a new version under the same name, it is re-encoded into the same folder and its block is marked `// UPDATED`, with a note saying whether anything in `content.js` needs to change.
+5. **Describe your projects.** Open `content.js` in a code editor such as [VS Code](https://code.visualstudio.com) (free). Don't use TextEdit or Word, which turn `"` into curly quotes and break the file. Delete the sample projects and paste in the blocks marked `// NEW` from `tools/new-projects.txt`. For each project, fill in the title, client, categories, summary and so on.
+6. **Pick your highlights and reel.** Put your best slugs in `highlights`. Keep your showreel out of your videos folder and encode it on its own with a name you choose, for example `bash tools/encode.sh ~/Renders/showreel.mov my-showreel`. Don't paste its block into the projects. Instead, in `content.js` under `hero.reel`:
    - set `video: "media/my-showreel/video.mp4"` and `poster: "media/my-showreel/poster.jpg"`, and copy `duration` and `fps` from its block;
    - if you also have a 9:16 cut, encode it the same way (for example as `my-showreel-vertical`) and point `videoVertical`, `posterVertical` and `durationVertical` at it. If you don't, set `videoVertical: ""` and `posterVertical: ""`, and phones will use your 16:9 reel.
 7. **Check it.** Double-click `index.html`. If you see a yellow message saying `content.js` could not be read, there's a typo in it (usually curly quotes or a missing comma). Press F12 (Cmd+Option+J on a Mac) and the Console names the line.
@@ -63,13 +65,13 @@ bash tools/encode.sh ~/Desktop/"videos portfolio"          # every video in the 
 bash tools/encode.sh ~/Renders/Halden_Ident_v12.mov halden-ident
 ```
 
-The script remembers which master made each folder (in `tools/encoded.txt`, which stays on your computer). Re-running it after adding videos only encodes the new ones, and `tools/new-projects.txt` always lists every video from the last run.
+Link names come from file names. Two videos with the same file name in different folders (say `Halden/final.mov` and `Mercury/final.mov`) get their folder's name in front: `halden-final`, `mercury-final`. Each project folder gets a small hidden `.encoded` note recording which master it was made from (its file name as a checksum, size and date, never its location), so re-running only encodes new or changed videos. Uploading that note or not makes no difference to the site. `tools/new-projects.txt` keeps growing, with a heading for each run: the newest blocks are at the bottom.
 
 For each video it creates `media/<slug>/` containing:
 
 | File | What it is | Typical size |
 | --- | --- | --- |
-| `video.mp4` | Full clip for the viewer. H.264, 1080p max, sound kept | 5–20 MB per 30 s |
+| `video.mp4` | Full clip for the viewer. H.264, 1080p max, sound kept as stereo | 5–20 MB per 30 s |
 | `preview.mp4` | Silent 6-second loop at 960px for hover previews | 0.5–2 MB |
 | `poster.jpg` | Still frame shown before playback | 100–250 KB |
 
