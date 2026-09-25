@@ -20,13 +20,6 @@
   const CONTACT = DATA.contact || {};
   const root = document.documentElement;
 
-  const mqReduce = matchMedia('(prefers-reduced-motion: reduce)');
-  const mqFine = matchMedia('(hover: hover) and (pointer: fine)');
-  let reduced = mqReduce.matches;
-  const saveData = !!(navigator.connection && navigator.connection.saveData);
-  const autoplayOK = () => !reduced && !saveData;
-  const hasVT = typeof document.startViewTransition === 'function';
-
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -35,16 +28,29 @@
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const slugify = (s) => String(s).toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   const list = (v) => [].concat(v == null ? [] : v).filter((x) => x !== '' && x != null);
-  const safe = (fn) => { try { fn(); } catch (err) { console.error('[portfolio]', err); } };
+  const safe = (fn, ...args) => { try { return fn(...args); } catch (err) { console.error('[portfolio]', err); return undefined; } };
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage unavailable */ } },
   };
 
-  /** Seconds → SMPTE-style timecode HH:MM:SS:FF */
+  const mqReduce = matchMedia('(prefers-reduced-motion: reduce)');
+  const mqFine = matchMedia('(hover: hover) and (pointer: fine)');
+  const mqCoarse = matchMedia('(pointer: coarse)');
+  const mqPhone = matchMedia('(max-width: 560px)');
+  let reduced = mqReduce.matches;
+  // "Still" is the visitor's own pause for everything that moves by itself (WCAG 2.2.2).
+  let still = store.get('bg-still') === '1';
+  const saveData = !!(navigator.connection && navigator.connection.saveData);
+  const ambientOK = () => !reduced && !still;
+  const autoplayOK = () => ambientOK() && !saveData;
+  const hasVT = typeof document.startViewTransition === 'function';
+
+  /** Seconds → SMPTE-style non-drop-frame timecode HH:MM:SS:FF */
   function timecode(sec, fps = 25) {
     const r = Math.max(1, Math.round(fps));
-    const frames = Math.floor(Math.max(0, sec || 0) * r + 1e-6);
+    // Frames are counted at the real rate (29.97, 23.976…) and labelled at the nominal one.
+    const frames = Math.floor(Math.max(0, sec || 0) * (fps || r) + 1e-6);
     const s = Math.floor(frames / r);
     return `${pad(s / 3600)}:${pad((s / 60) % 60)}:${pad(s % 60)}:${pad(frames % r)}`;
   }
@@ -60,22 +66,41 @@
     if (!d) return 0;
     return String(d).split(':').reduce((acc, part) => acc * 60 + (parseFloat(part) || 0), 0);
   }
+  const NAMED_RATIOS = [['16:9', 16 / 9], ['9:16', 9 / 16], ['1:1', 1], ['4:5', 4 / 5], ['5:4', 5 / 4], ['4:3', 4 / 3], ['3:4', 3 / 4], ['2:3', 2 / 3], ['3:2', 3 / 2], ['1.85:1', 1.85], ['2.39:1', 2.39], ['21:9', 21 / 9], ['2:1', 2]];
   function parseRatio(fmt) {
     const f = String(fmt || '16:9').toLowerCase().trim();
     if (/^(v|vertical|portrait)$/.test(f)) return { ratio: '9:16', aspect: 9 / 16 };
     if (/^(h|horizontal|landscape)$/.test(f)) return { ratio: '16:9', aspect: 16 / 9 };
     const m = f.match(/^(\d+(?:\.\d+)?)\s*[:x/×]\s*(\d+(?:\.\d+)?)$/);
-    if (m) {
+    if (m && +m[1] > 0 && +m[2] > 0) {
+      const aspect = +m[1] / +m[2];
+      // Pixel sizes like 1920:1036 get the familiar name within 2%.
+      const named = NAMED_RATIOS.find(([, a]) => Math.abs(aspect / a - 1) < 0.02);
+      if (named) return { ratio: named[0], aspect };
       let a = +m[1], b = +m[2];
-      if (a > 0 && b > 0) {
-        if (Number.isInteger(a) && Number.isInteger(b)) {
-          const g = (x, y) => (y ? g(y, x % y) : x);
-          const d = g(a, b); a /= d; b /= d;
-        }
-        return { ratio: `${a}:${b}`, aspect: a / b };
+      if (Number.isInteger(a) && Number.isInteger(b)) {
+        const g = (x, y) => (y ? g(y, x % y) : x);
+        const d = g(a, b); a /= d; b /= d;
       }
+      const ratio = a <= 32 && b <= 32 ? `${a}:${b}` : (aspect >= 1 ? `${aspect.toFixed(2)}:1` : `1:${(1 / aspect).toFixed(2)}`);
+      return { ratio, aspect };
     }
     return { ratio: '16:9', aspect: 16 / 9 };
+  }
+  /** Vimeo/YouTube: accepts an ID or any pasted share/watch/embed link. */
+  function embedURL(p) {
+    if (p.vimeo) {
+      const s = String(p.vimeo).trim();
+      const id = (s.match(/(?:vimeo\.com\/(?:video\/|channels\/[^/]+\/|groups\/[^/]+\/videos\/)?)?(\d{5,})/) || [])[1];
+      const hash = (s.match(/[?&]h=([0-9a-f]+)/i) || s.match(/vimeo\.com\/\d+\/([0-9a-f]{6,})/i) || [])[1];
+      if (id) return `https://player.vimeo.com/video/${id}?autoplay=1&title=0&byline=0&portrait=0&dnt=1${hash ? `&h=${hash}` : ''}`;
+    }
+    if (p.youtube) {
+      const s = String(p.youtube).trim();
+      const id = (s.match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/embed\/|\/live\/)([\w-]{11})/) || [])[1] || (/^[\w-]{11}$/.test(s) ? s : '');
+      if (id) return `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&playsinline=1`;
+    }
+    return '';
   }
 
   const ICON = {
@@ -99,12 +124,17 @@
   // After Effects label colors: category swatches read like a timeline's label column.
   const LABELS = ['#a9cbc7', '#e5bcc9', '#a9a9ca', '#e7c19e', '#b3c7b3', '#e4d84c', '#a89677', '#3da2a5', '#677de0', '#f46dd6', '#e8920d', '#8e2c9a'];
   const FPS = +SITE.fps || 25;
+  // Page ids a project link must never shadow.
+  const RESERVED = new Set(['top', 'highlights', 'work', 'about', 'contact', 'main', 'nav', 'menu', 'rail', 'footer', 'viewer', 'grid', 'index', 'marquee', 'showreel']);
 
   const seen = new Set();
   const PROJECTS = list(DATA.projects).filter((p) => p && p.title && !p.hidden).map((p, i) => {
     const { ratio, aspect } = parseRatio(p.format);
-    let slug = slugify(p.slug || p.title) || `project-${i + 1}`;
-    while (seen.has(slug)) slug += '-2';
+    const wanted = slugify(p.slug || p.title) || `project-${i + 1}`;
+    let slug = RESERVED.has(wanted) ? `${wanted}-project` : wanted;
+    let n = 2;
+    while (seen.has(slug)) slug = `${wanted}-${n++}`;
+    if (slug !== wanted) console.warn(`[portfolio] "${p.title}": link name "${wanted}" is taken, using "${slug}". Give it a unique slug in content.js.`);
     seen.add(slug);
     return Object.assign({}, p, {
       n: i + 1,
@@ -119,6 +149,7 @@
       fps: +p.fps || FPS,
       seconds: parseDuration(p.duration),
       preview: p.preview || p.video || '',
+      embed: embedURL(p),
       description: list(p.description),
       credits: list(p.credits),
       links: list(p.links),
@@ -132,42 +163,53 @@
   CATS.forEach((c, i) => { CAT_COLOR[c] = (DATA.categoryColors || {})[c] || LABELS[i % LABELS.length]; });
 
   const REEL_SRC = HERO.reel || {};
-  function reelProject(vertical) {
-    const video = vertical
-      ? REEL_SRC.fullVertical || REEL_SRC.videoVertical
-      : REEL_SRC.full || REEL_SRC.video;
+  const isPortrait = () => innerHeight > innerWidth * 1.05;
+  const REEL_FPS = +REEL_SRC.fps || FPS;
+  /** The muted loop behind the hero. */
+  function heroLoop() {
+    const v = isPortrait() && REEL_SRC.videoVertical;
+    const src = v ? REEL_SRC.videoVertical : REEL_SRC.video;
+    if (!src) return null;
+    return { src, vertical: !!v, poster: (v && REEL_SRC.posterVertical) || REEL_SRC.poster || '' };
+  }
+  /** What "Play showreel" opens: the long cut with sound when there is one. */
+  function viewerReel() {
+    const portrait = isPortrait();
+    let video = '';
+    let vertical = false;
+    if (portrait && REEL_SRC.fullVertical) { video = REEL_SRC.fullVertical; vertical = true; }
+    else if (REEL_SRC.full) video = REEL_SRC.full;
+    else if (portrait && REEL_SRC.videoVertical) { video = REEL_SRC.videoVertical; vertical = true; }
+    else video = REEL_SRC.video;
     if (!video) return null;
     return {
       isReel: true, slug: 'showreel', n: 0,
       title: REEL_SRC.title || 'Showreel',
       client: SITE.name || '', year: REEL_SRC.year ? String(REEL_SRC.year) : '',
-      ratio: vertical ? '9:16' : '16:9', aspect: vertical ? 9 / 16 : 16 / 9, vertical: !!vertical,
-      fps: +REEL_SRC.fps || FPS, seconds: parseDuration(REEL_SRC.duration),
-      video, preview: video,
+      ratio: vertical ? '9:16' : '16:9', aspect: vertical ? 9 / 16 : 16 / 9, vertical,
+      fps: REEL_FPS, seconds: parseDuration(vertical ? REEL_SRC.durationVertical : REEL_SRC.duration),
+      video, preview: video, embed: '',
       poster: (vertical && REEL_SRC.posterVertical) || REEL_SRC.poster || '',
       summary: REEL_SRC.summary || '', description: list(REEL_SRC.description),
       categories: [], tools: [], credits: [], links: [], role: '',
     };
   }
-  const isPortrait = () => innerHeight > innerWidth * 1.05;
-  const currentReel = () => (isPortrait() && (REEL_SRC.videoVertical || REEL_SRC.fullVertical) ? reelProject(true) : reelProject(false));
 
   const durLabel = (p) => (p.seconds ? clock(p.seconds) : '');
   const totalRuntime = PROJECTS.reduce((a, p) => a + (p.seconds || 0), 0) || 60;
+  const baseTitle = `${SITE.name || 'Portfolio'}${SITE.role ? ` — ${SITE.role}` : ''}`;
 
   /* ---------- 3. Rendering helpers ---------- */
-  function mediaHTML(p, { badge = false, eager = false, reveal = false, delay = 0 } = {}) {
+  function mediaHTML(p, { badge = false, reveal = false } = {}) {
     const hasPoster = !!p.poster;
-    const img = hasPoster
-      ? `<img src="${esc(p.poster)}" alt="" ${eager ? 'fetchpriority="high"' : 'loading="lazy"'} decoding="async">`
-      : '';
+    const img = hasPoster ? `<img src="${esc(p.poster)}" alt="" loading="lazy" decoding="async">` : '';
     const vid = p.preview
       ? (hasPoster
         ? `<video muted loop playsinline preload="none" aria-hidden="true" data-src="${esc(p.preview)}"></video>`
         : `<video muted loop playsinline preload="metadata" aria-hidden="true" src="${esc(p.preview)}#t=0.1"></video>`)
       : '';
     const glyph = `<i class="ratio-glyph ratio-glyph--${p.vertical ? 'v' : 'h'}"></i>`;
-    return `<div class="media media--${p.vertical ? 'v' : 'h'}${hasPoster ? '' : ' is-playing'}${reveal ? ' rv rv--clip' : ''}" style="--ar:${p.aspect};${p.color ? `--c:${esc(p.color)};` : ''}${delay ? `--d:${delay}s;` : ''}">
+    return `<div class="media media--${p.vertical ? 'v' : 'h'}${hasPoster ? '' : ' is-playing'}${reveal ? ' rv rv--clip' : ''}" style="--ar:${p.aspect};${p.color ? `--c:${esc(p.color)};` : ''}">
       <div class="media__inner">${img}${vid}</div>
       <span class="media__progress"></span>
       ${badge ? `<span class="media__badge mono">${glyph}${esc(p.ratio)}</span>` : ''}
@@ -201,9 +243,19 @@
 
   /* ---------- 4. Frame loop & media ---------- */
   const S = { y: scrollY, sy: scrollY, vy: 0, vw: innerWidth, vh: innerHeight, px: innerWidth / 2, py: innerHeight / 2, mouse: false };
-  const tickers = new Set();
+  // Page tickers pause while the viewer covers the page; viewer tickers always run.
+  // A ticker returns true while it still has something to animate; the loop sleeps when none do.
+  const tickers = [];
+  const addTicker = (fn, page = true) => { tickers.push({ fn, page }); wake(); };
+  let rafId = 0;
   let lastT = performance.now();
+  let lastBusy = 0;
+  function wake() {
+    lastBusy = performance.now();
+    if (!rafId) { lastT = performance.now(); rafId = requestAnimationFrame(frame); }
+  }
   function frame(now) {
+    rafId = 0;
     const dt = clamp((now - lastT) / 1000, 0.001, 0.05);
     lastT = now;
     const y = scrollY;
@@ -211,12 +263,22 @@
     S.y = y;
     S.sy += (y - S.sy) * (reduced ? 1 : 1 - Math.exp(-dt * 9));
     if (Math.abs(y - S.sy) < 0.05) S.sy = y;
-    tickers.forEach((fn) => safe(() => fn(dt, now)));
-    requestAnimationFrame(frame);
+    let busy = S.sy !== y || Math.abs(S.vy) > 2;
+    const pageOn = !Viewer.isOpen || Viewer.closing;
+    for (const t of tickers) {
+      if (t.page && !pageOn) continue;
+      if (safe(t.fn, dt, now)) busy = true;
+    }
+    if (busy) lastBusy = now;
+    if (now - lastBusy < 500) rafId = requestAnimationFrame(frame);
   }
   addEventListener('pointermove', (e) => {
     S.px = e.clientX; S.py = e.clientY; S.mouse = e.pointerType === 'mouse';
+    wake();
   }, { passive: true });
+  addEventListener('scroll', wake, { passive: true });
+  addEventListener('keydown', wake);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
 
   const Media = {
     attach(v) {
@@ -231,11 +293,20 @@
       if (pr && pr.catch) pr.catch(() => {});
     },
     pause(v) { if (v && !v.paused) v.pause(); },
+    /** Drop a paused preview's buffer; the poster stays. */
+    release(v) {
+      if (!v || !v.paused || !v.dataset.src || !v.getAttribute('src')) return;
+      v.removeAttribute('src');
+      try { v.load(); } catch (e) { /* ignore */ }
+      const m = v.closest('.media');
+      if (m) m.classList.remove('is-playing');
+    },
   };
   // Media events don't bubble; listen in the capture phase to flag wrappers.
   document.addEventListener('playing', (e) => {
     const m = e.target.closest && e.target.closest('.media, .hero__media');
     if (m) m.classList.add('is-playing');
+    wake();
   }, true);
   document.addEventListener('pause', (e) => {
     const m = e.target.closest && e.target.closest('.media');
@@ -249,7 +320,7 @@
     $$('video').forEach((v) => {
       if (!v.muted) return; // the viewer keeps playing with sound, like any player
       if (document.hidden) { if (!v.paused) { v._resume = true; v.pause(); } }
-      else if (v._resume) { v._resume = false; Media.play(v); }
+      else if (v._resume) { v._resume = false; if (autoplayOK()) Media.play(v); }
     });
   });
 
@@ -259,11 +330,31 @@
       const v = en.target.querySelector('video');
       if (!v) return;
       en.target._inView = en.isIntersecting;
-      if (en.isIntersecting && autoplayOK()) Media.play(v);
+      if (en.isIntersecting && autoplayOK() && !Viewer.isOpen) Media.play(v);
       else if (!en.isIntersecting) Media.pause(v);
     });
   }, { threshold: 0.35 }) : null;
   const autoplayWhenVisible = (el) => { if (autoIO && el) autoIO.observe(el); };
+
+  /** Pause or resume everything that moves on its own. */
+  function setStill(on, save = true) {
+    still = on;
+    if (save) store.set('bg-still', on ? '1' : '0');
+    root.classList.toggle('is-still', on);
+    $$('[data-motion]').forEach((b) => {
+      b.setAttribute('aria-pressed', String(on));
+      b.setAttribute('aria-label', on ? 'Play motion' : 'Pause motion');
+      b.title = on ? 'Play motion' : 'Pause motion';
+    });
+    if (on) {
+      $$('#main video').forEach((v) => Media.pause(v));
+    } else if (autoplayOK()) {
+      const hv = $('.hero__media video');
+      if (hv && $('#top')._visible) Media.play(hv);
+      $$('.hl__link .media').forEach((m) => { if (m._inView) Media.play($('video', m)); });
+    }
+    wake();
+  }
 
   /* ---------- 5. Nav + hero ---------- */
   function renderNav() {
@@ -298,9 +389,11 @@
       </div>`;
     menu.inert = true;
     const openBtn = $('.nav .menu-btn');
+    const behind = ['#main', '#footer', '#rail', '.skip', '.nav__inner'];
     const setMenu = (open) => {
       menu.classList.toggle('is-open', open);
       menu.inert = !open;
+      behind.forEach((s) => { const n = $(s); if (n) n.inert = open; });
       openBtn.setAttribute('aria-expanded', String(open));
       root.classList.toggle('is-locked', open);
       if (open) $('.menu__close', menu).focus();
@@ -322,7 +415,14 @@
       nav.classList.toggle('is-over-media', y < heroEnd);
       nav.classList.toggle('is-solid', y >= heroEnd);
       if (y > lastY + 6 && y > 240) nav.classList.add('is-hidden');
-      else if (y < lastY - 6 || y < 240) nav.classList.remove('is-hidden');
+      else if (y < lastY - 6 || y < 240) {
+        // On phones the stuck filter bar already takes the top: don't stack the nav on it.
+        const ctl = $('.work__controls');
+        const work = $('#work');
+        const inGrid = mqPhone.matches && ctl && work && y >= 240
+          && ctl.getBoundingClientRect().top <= 1 && work.getBoundingClientRect().bottom > innerHeight * 0.6;
+        if (!inGrid) nav.classList.remove('is-hidden');
+      }
       lastY = y;
     };
     addEventListener('scroll', update, { passive: true });
@@ -330,41 +430,52 @@
   }
 
   /**
-   * Variable-font kinetic type. Each letter's width/weight axis reacts to the
-   * pointer (or an idle wave). Widths are normalised per frame so a line keeps
-   * its overall length while letters trade width between them.
+   * Variable-font kinetic type. Each letter's width/weight axes react to the
+   * pointer (or an idle wave). Widths are normalised so letters trade width,
+   * and a per-line correction keeps every line inside its container.
    */
   class Kinetic {
     constructor(host, lines, opts = {}) {
       this.o = Object.assign({ w: 100, wMin: 50, wMax: 150, amp: 70, wg: 800, wgMin: 250, wgAmp: 110, radius: 0.15, maxH: Infinity, fill: 0.96 }, opts);
       this.host = host;
       host.innerHTML = lines.map((l) => `<span class="k-line">${Array.from(String(l)).map((ch) => (ch === ' ' ? '<span class="k-sp"></span>' : `<span class="k-ch">${esc(ch)}</span>`)).join('')}</span>`).join('');
-      this.lines = $$('.k-line', host);
-      this.chars = $$('.k-ch', host).map((el, i) => ({ el, i, x: 0, y: 0, w: this.o.wMin, g: this.o.wgMin, lw: -1, lg: -1, a: -1 }));
+      this.lines = $$('.k-line', host).map((el) => ({ el, corr: 0, first: null, last: null }));
+      this.chars = [];
+      this.lines.forEach((L, li) => {
+        const cs = $$('.k-ch', L.el);
+        L.first = cs[0] || null;
+        L.last = cs[cs.length - 1] || null;
+        cs.forEach((el) => this.chars.push({ el, li, x: 0, y: 0, w: this.o.wMin, g: this.o.wgMin, lw: -1, lg: -1, a: -1, ty: -1 }));
+      });
       this.chars.forEach((c) => { c.el.style.opacity = '0'; });
       this.born = null;
       this.hover = 0;
       this.squeeze = 0;
       this.visible = true;
+      this.avail = 0;
+      this.introDone = false;
     }
-    start(delay = 0) { if (this.born === null) this.born = performance.now() + delay * 1000; }
+    start(delay = 0) { if (this.born === null) { this.born = performance.now() + delay * 1000; wake(); } }
     setBase() {
       const v = `"wdth" ${this.o.w}, "wght" ${this.o.wg}`;
-      this.chars.forEach((c) => { c.el.style.fontVariationSettings = v; c.lw = -1; });
+      this.chars.forEach((c) => { c.el.style.fontVariationSettings = v; c.lw = -1; c.lg = -1; });
     }
     fit() {
       const host = this.host;
-      const avail = host.clientWidth;
+      // The heading's own width: never the letters' animated width.
+      const avail = host.parentElement.clientWidth;
       if (!avail) return;
+      this.avail = avail;
       this.setBase();
       host.style.fontSize = '100px';
-      this.lines.forEach((l) => { l.style.width = 'max-content'; });
-      const widest = Math.max(...this.lines.map((l) => l.offsetWidth)) || 1;
-      this.lines.forEach((l) => { l.style.width = ''; });
+      this.lines.forEach((L) => { L.el.style.width = 'max-content'; L.corr = 0; });
+      const widest = Math.max(...this.lines.map((L) => L.el.offsetWidth)) || 1;
+      this.lines.forEach((L) => { L.el.style.width = ''; });
       let fs = (100 * avail) / widest * this.o.fill;
       fs = Math.min(fs, this.o.maxH / (this.lines.length * 0.82));
       host.style.fontSize = `${Math.max(24, fs).toFixed(1)}px`;
       this.measure();
+      wake();
     }
     measure() {
       const r = this.host.getBoundingClientRect();
@@ -374,14 +485,19 @@
         c.y = b.top + b.height / 2 - r.top;
       });
     }
+    /** Returns true while anything is still moving. */
     update(dt, now) {
-      if (this.born === null || !this.visible) return;
+      if (this.born === null || !this.visible || now < this.born) return this.born !== null && this.visible;
       const o = this.o;
       const n = this.chars.length;
+      if (!n) return false;
       const t = (now - this.born) / 1000;
       const r = this.host.getBoundingClientRect();
       const over = S.mouse && S.px >= r.left - 40 && S.px <= r.right + 40 && S.py >= r.top - 80 && S.py <= r.bottom + 80;
-      this.hover += ((over ? 1 : 0) - this.hover) * Math.min(1, dt * 3);
+      const hoverTarget = over && !reduced ? 1 : 0;
+      this.hover += (hoverTarget - this.hover) * Math.min(1, dt * 3);
+      if (Math.abs(hoverTarget - this.hover) < 0.002) this.hover = hoverTarget;
+      const idleOn = ambientOK();
       const base = o.w + (58 - o.w) * this.squeeze;
       const W = r.width || 1;
       const f = new Array(n);
@@ -390,7 +506,7 @@
         const c = this.chars[k];
         let v = 0;
         if (!reduced) {
-          const idle = 0.5 + 0.5 * Math.sin(t * 1.25 - k * 0.6);
+          const idle = idleOn ? 0.5 + 0.5 * Math.sin(t * 1.25 - k * 0.6) : 0.5;
           let fp = 0;
           if (this.hover > 0.001) {
             const dx = (S.px - r.left - c.x) / W;
@@ -401,58 +517,78 @@
         }
         f[k] = v; mean += v;
       }
-      mean /= n || 1;
+      mean /= n;
       const follow = 1 - Math.exp(-dt * 9);
+      let changed = false;
+      let introRunning = false;
       for (let k = 0; k < n; k++) {
         const c = this.chars[k];
         const intro = reduced ? 1 : easeOutExpo(clamp((t - k * 0.045) / 1.2, 0, 1));
-        const tw = clamp(base + o.amp * (f[k] - mean), o.wMin, o.wMax);
+        if (intro < 1) introRunning = true;
+        const tw = clamp(base + o.amp * (f[k] - mean) + this.lines[c.li].corr, o.wMin, o.wMax);
         const tg = clamp(o.wg + o.wgAmp * (f[k] - mean) * 2, 100, 900);
         const w = o.wMin + (tw - o.wMin) * intro;
         const g = o.wgMin + (tg - o.wgMin) * intro;
         const k0 = intro < 1 ? 1 : follow;
         c.w += (w - c.w) * k0;
         c.g += (g - c.g) * k0;
-        if (Math.abs(c.w - c.lw) > 0.2 || Math.abs(c.g - c.lg) > 1) {
-          c.el.style.fontVariationSettings = `"wdth" ${c.w.toFixed(1)}, "wght" ${Math.round(c.g)}`;
-          c.lw = c.w; c.lg = c.g;
+        // Quantised axes let the browser reuse font instances instead of building one per frame.
+        const qw = Math.round(c.w * 2) / 2;
+        const qg = Math.round(c.g / 10) * 10;
+        if (qw !== c.lw || qg !== c.lg) {
+          c.el.style.fontVariationSettings = `"wdth" ${qw}, "wght" ${qg}`;
+          c.lw = qw; c.lg = qg;
+          changed = true;
         }
         const a = clamp(intro * 3, 0, 1);
-        if (a !== c.a) {
-          c.el.style.opacity = a.toFixed(3);
-          c.el.style.transform = intro < 1 ? `translateY(${((1 - intro) * 0.35).toFixed(3)}em)` : '';
-          c.a = a;
+        const ty = intro < 1 ? Math.round((1 - intro) * 350) / 1000 : 0;
+        if (a !== c.a || ty !== c.ty) {
+          c.el.style.opacity = a >= 1 ? '' : a.toFixed(3);
+          c.el.style.transform = ty ? `translateY(${ty}em)` : '';
+          c.a = a; c.ty = ty;
         }
       }
+      // Keep every line inside the heading: shrink fast when a line spills, relax slowly.
+      if (changed && this.avail) {
+        const limit = this.avail * 0.995;
+        this.lines.forEach((L) => {
+          if (!L.first) return;
+          const w = L.last.getBoundingClientRect().right - L.first.getBoundingClientRect().left;
+          const overBy = (w - limit) / this.avail;
+          L.corr = clamp(L.corr - overBy * (overBy > 0 ? 160 : 40), -45, 0);
+        });
+      }
+      return changed || introRunning || (idleOn && !reduced) || (this.hover > 0 && this.hover < 1);
     }
   }
 
   let heroKinetic = null;
   function renderHero() {
     const hero = $('#top');
-    const reel = currentReel();
+    const loop = heroLoop();
+    const reel = viewerReel();
     const lines = list(HERO.title).length ? list(HERO.title) : [SITE.name || 'Motion', SITE.role || 'Design'];
-    const poster = reel ? reel.poster : '';
+    const reelLabel = `${REEL_SRC.title || 'Showreel'}${REEL_SRC.year ? ` ${REEL_SRC.year}` : ''}`;
     hero.innerHTML = `
       <div class="hero__media">
-        ${poster ? `<img src="${esc(poster)}" alt="" fetchpriority="high">` : ''}
-        ${reel ? '<video muted loop playsinline preload="auto" aria-hidden="true"></video>' : ''}
+        ${loop && loop.poster ? `<img src="${esc(loop.poster)}" alt="" fetchpriority="high">` : ''}
+        ${loop ? '<video muted loop playsinline preload="auto" aria-hidden="true"></video>' : ''}
       </div>
       <div class="hero__scrim"></div>
       <div class="hero__frame" aria-hidden="true">
         <i class="crop crop--tl"></i><i class="crop crop--tr"></i><i class="crop crop--bl"></i><i class="crop crop--br"></i><i class="crosshair"></i>
       </div>
       <div class="hero__hud mono" aria-hidden="true">
-        <span class="hud__rec"><i class="kf"></i>${esc(reel ? `${reel.title} ${reel.year}` : SITE.role || '')}</span>
-        <span class="hud__fmt">${esc(reel ? reel.ratio : '')} · ${reel ? reel.fps : FPS} fps</span>
-        <span class="hud__tc">TC <span data-hero-tc>${timecode(0, reel ? reel.fps : FPS)}</span></span>
+        <span class="hud__rec"><i class="kf"></i>${esc(loop ? reelLabel : SITE.role || '')}</span>
+        <span class="hud__fmt">${loop ? `${loop.vertical ? '9:16' : '16:9'} · ` : ''}${REEL_FPS} fps</span>
+        <span class="hud__tc">TC <span data-hero-tc>${timecode(0, REEL_FPS)}</span></span>
       </div>
       <div class="hero__content">
         <h1 class="hero__title"><span class="vh">${esc(lines.join(' '))}</span><span class="k" aria-hidden="true"></span></h1>
         <div class="hero__foot">
           ${HERO.intro ? `<p class="hero__intro">${esc(HERO.intro)}</p>` : ''}
           <div class="hero__actions">
-            ${reel ? `<button class="btn btn--media" type="button" data-open-reel data-cursor="Watch" data-cursor-meta="with sound"><span class="btn__icon">${ICON.play}</span>Play showreel${reel.seconds ? ` <span class="btn__meta">${clock(reel.seconds)}</span>` : ''}</button>` : ''}
+            ${reel ? `<button class="btn btn--media" type="button" data-open-reel data-cursor="Watch" data-cursor-meta="with sound"><span class="btn__icon">${ICON.play}</span>Play showreel<span class="btn__meta" data-reel-len>${reel.seconds ? clock(reel.seconds) : ''}</span></button>` : ''}
             <a class="scroll-cue mono" href="#${PROJECTS.length ? 'highlights' : 'about'}"><span class="scroll-cue__line"></span>Scroll</a>
           </div>
         </div>
@@ -467,35 +603,39 @@
     const tcEl = $('[data-hero-tc]', hero);
     const title = $('.hero__title', hero);
     const content = $('.hero__content', hero);
+    const lenEl = $('[data-reel-len]', hero);
     let portrait = isPortrait();
-    let visible = true;
+    hero._visible = true;
 
     const setSource = () => {
-      const reel = currentReel();
-      if (!video || !reel) return;
-      const src = reel.preview;
-      if (video.getAttribute('src') !== src) {
-        video.src = src;
-        const img = $('img', media);
-        if (img && reel.poster) img.src = reel.poster;
+      const loop = heroLoop();
+      if (!video || !loop) return;
+      const img = $('img', media);
+      if (img && loop.poster && img.getAttribute('src') !== loop.poster) { img.classList.remove('is-broken'); img.src = loop.poster; }
+      // Only fetch the loop when it may actually play (not for reduced motion, Save-Data or paused motion).
+      if (video.dataset.src !== loop.src) {
+        video.dataset.src = loop.src;
+        if (video.getAttribute('src')) { video.removeAttribute('src'); try { video.load(); } catch (e) { /* ignore */ } }
       }
-      video._fps = reel.fps;
-      if (autoplayOK() && visible) Media.play(video);
+      if (autoplayOK() && hero._visible) Media.play(video);
+      if (lenEl) { const r = viewerReel(); lenEl.textContent = r && r.seconds ? clock(r.seconds) : ''; }
     };
     if (video) {
       setSource();
       if ('IntersectionObserver' in window) {
+        // -1px keeps "resting exactly on the hero's bottom edge" from counting as visible.
         new IntersectionObserver(([en]) => {
-          visible = en.isIntersecting;
-          heroKinetic.visible = visible;
-          if (visible && autoplayOK()) Media.play(video); else Media.pause(video);
-        }).observe(hero);
+          hero._visible = en.isIntersecting;
+          heroKinetic.visible = en.isIntersecting;
+          if (en.isIntersecting && autoplayOK() && !Viewer.isOpen) Media.play(video); else Media.pause(video);
+          wake();
+        }, { rootMargin: '-1px 0px 0px 0px' }).observe(hero);
       }
     }
 
     const fit = () => {
-      const maxH = hero.clientHeight - content.querySelector('.hero__foot').offsetHeight - 220;
-      heroKinetic.o.maxH = Math.max(120, maxH);
+      const maxH = hero.clientHeight - content.querySelector('.hero__foot').offsetHeight - (hero.clientHeight < 520 ? 120 : 220);
+      heroKinetic.o.maxH = Math.max(80, maxH);
       heroKinetic.fit();
     };
     fit();
@@ -507,7 +647,7 @@
       if (isPortrait() !== portrait) { portrait = isPortrait(); setSource(); }
     });
 
-    tickers.add((dt, now) => {
+    addTicker((dt, now) => {
       const h = hero.offsetHeight || 1;
       const p = clamp(S.sy / h, 0, 1);
       if (p < 1) {
@@ -517,8 +657,10 @@
         }
         heroKinetic.squeeze = reduced ? 0 : p;
       }
-      heroKinetic.update(dt, now);
-      if (video && tcEl && !video.paused) tcEl.textContent = timecode(video.currentTime, video._fps || FPS);
+      const moving = heroKinetic.update(dt, now);
+      const playing = video && !video.paused && hero._visible;
+      if (playing && tcEl) tcEl.textContent = timecode(video.currentTime, REEL_FPS);
+      return moving || playing;
     });
   }
 
@@ -542,7 +684,7 @@
         </div>
         <div class="hl__track">
           ${shown.map((p, i) => `
-            <article class="hl__item hl__item--${p.vertical ? 'v' : 'h'}">
+            <article class="hl__item hl__item--${p.vertical ? 'v' : 'h'}" style="--ar:${p.aspect};--hs:${p.aspect > 1 ? 0.8 : 1}">
               <a class="hl__link" href="#${p.slug}" data-open="${p.slug}" data-cursor="Play" data-cursor-meta="${esc(durLabel(p))}" tabindex="-1" aria-hidden="true">
                 ${mediaHTML(p, { badge: true })}
               </a>
@@ -569,27 +711,38 @@
     const track = $('.hl__track', sec);
     const bar = $('.hl__bar', sec);
     const cur = $('[data-hl-current]', sec);
+    const items = $$('.hl__item', track);
     let lastIdx = -1;
+    let lastProg = -1;
 
     const measure = () => {
-      HL.pinned = S.vw >= 900 && S.vh >= 560 && !reduced;
+      sec.classList.add('is-pinned');
+      const stickyH = sticky.offsetHeight;
+      HL.pinned = S.vw >= 900 && stickyH >= 560 && !reduced;
       sec.classList.toggle('is-pinned', HL.pinned);
       if (HL.pinned) {
         track.style.transform = 'none';
         const last = track.lastElementChild;
         const padR = parseFloat(getComputedStyle(track).paddingRight) || 0;
         HL.dist = Math.max(0, last.offsetLeft + last.offsetWidth + padR - sticky.clientWidth);
-        sec.style.height = `${Math.round(S.vh + HL.dist)}px`;
+        // Height comes from the sticky frame itself (svh), so URL-bar changes can't desync it.
+        sec.style.height = `${Math.round(stickyH + HL.dist)}px`;
         HL.top = sec.getBoundingClientRect().top + scrollY;
         track.style.transform = `translate3d(${HL.x}px,0,0)`;
       } else {
         sec.style.height = '';
         track.style.transform = '';
       }
+      requestRailMeasure();
+      wake();
     };
     measure();
     onResize(measure);
     onFontsReady(measure);
+    if ('ResizeObserver' in window) {
+      let h = sticky.offsetHeight;
+      new ResizeObserver(() => { if (Math.abs(sticky.offsetHeight - h) > 1) { h = sticky.offsetHeight; measure(); } }).observe(sticky);
+    }
 
     // Keyboard users: tabbing to an item scrolls the page so the reel brings it into view.
     track.addEventListener('focusin', (e) => {
@@ -601,9 +754,12 @@
       scrollTo({ top: HL.top + x, behavior: 'instant' });
       HL.x = -x;
     });
+    track.addEventListener('scroll', wake, { passive: true });
 
-    tickers.add((dt) => {
+    addTicker((dt) => {
       let prog;
+      let moving = false;
+      let idx;
       if (HL.pinned) {
         if (S.y + S.vh < HL.top - 200 || S.y > HL.top + HL.dist + S.vh + 200) {
           // Off screen: park the track at the matching end without animating.
@@ -611,17 +767,23 @@
         } else {
           const target = -clamp((S.y - HL.top) / (HL.dist || 1), 0, 1) * HL.dist;
           HL.x += (target - HL.x) * (1 - Math.exp(-dt * 7));
-          if (Math.abs(target - HL.x) < 0.1) HL.x = target;
+          if (Math.abs(target - HL.x) < 0.1) HL.x = target; else moving = true;
         }
         track.style.transform = `translate3d(${HL.x.toFixed(2)}px,0,0)`;
         prog = HL.dist ? -HL.x / HL.dist : 0;
+        idx = Math.round(prog * (HL.n - 1));
       } else {
         const max = track.scrollWidth - track.clientWidth;
         prog = max > 0 ? track.scrollLeft / max : 0;
+        // Swipe mode: the current item is the last one whose start has been reached.
+        const x0 = items[0].offsetLeft;
+        idx = 0;
+        items.forEach((it, i) => { if (it.offsetLeft - x0 <= track.scrollLeft + 2) idx = i; });
+        if (prog > 0.995) idx = HL.n - 1;
       }
-      bar.style.setProperty('--p', prog.toFixed(4));
-      const idx = Math.round(prog * (HL.n - 1));
+      if (Math.abs(prog - lastProg) > 0.0005) { bar.style.setProperty('--p', prog.toFixed(4)); lastProg = prog; }
       if (idx !== lastIdx) { cur.textContent = pad(idx + 1); lastIdx = idx; }
+      return moving;
     });
   }
 
@@ -646,14 +808,15 @@
     measure();
     onResize(measure);
     onFontsReady(measure);
-    if ('IntersectionObserver' in window) new IntersectionObserver(([en]) => { visible = en.isIntersecting; }).observe(el);
-    tickers.add((dt) => {
-      if (!visible || reduced || !gw) return;
+    if ('IntersectionObserver' in window) new IntersectionObserver(([en]) => { visible = en.isIntersecting; wake(); }).observe(el);
+    addTicker((dt) => {
+      if (!visible || !ambientOK() || !gw) return false;
       if (Math.abs(S.vy) > 60) dir = S.vy > 0 ? 1 : -1;
       x -= (48 + Math.min(Math.abs(S.vy) * 0.25, 900)) * dir * dt;
       if (x <= -gw) x += gw;
       if (x > 0) x -= gw;
       track.style.transform = `translate3d(${x.toFixed(2)}px,0,0)`;
+      return true;
     });
   }
 
@@ -671,6 +834,7 @@
     const hLabel = onlyRatio(false) || 'Landscape';
     const vLabel = onlyRatio(true) || 'Portrait';
     const count = (c) => PROJECTS.filter((p) => p.categories.includes(c)).length;
+    const sortBtn = (key, label) => `<button type="button" data-sort="${key}" data-label="${label}" aria-label="Sort by ${label.toLowerCase()}">${label}</button>`;
     sec.innerHTML = `
       <div class="section-head">
         <h2 class="section-title rv" id="work-title">All work<sup>(${pad(PROJECTS.length)})</sup></h2>
@@ -707,12 +871,12 @@
       <div class="index" id="index" hidden>
         <div class="index__head mono">
           <span>No.</span>
-          <button type="button" data-sort="title">Project</button>
-          <button type="button" data-sort="client">Client</button>
+          ${sortBtn('title', 'Project')}
+          ${sortBtn('client', 'Client')}
           <span>Discipline</span>
           <span class="index__col-fmt">Format</span>
-          <button type="button" data-sort="year">Year</button>
-          <button type="button" data-sort="seconds">Length</button>
+          ${sortBtn('year', 'Year')}
+          ${sortBtn('seconds', 'Length')}
         </div>
         ${PROJECTS.map((p) => `
           <a class="index__row" href="#${p.slug}" data-open="${p.slug}" data-slug="${p.slug}">
@@ -729,7 +893,11 @@
       <div class="work__empty" hidden><p>No projects match both filters.</p><button class="btn btn--ghost" type="button" data-reset>Show all work</button></div>`;
   }
 
-  /** Masonry with look-ahead: wide clips span two columns and nearby tall clips fill the gaps. */
+  /**
+   * Masonry with look-ahead: wide clips span two columns, and each placement is
+   * scored by its own gap plus the smallest gap it forces on what comes next,
+   * so nearby tall clips fill the holes instead of leaving them.
+   */
   function layoutGrid(animate) {
     const grid = $('#grid');
     if (!grid || W.view !== 'grid') return;
@@ -748,10 +916,10 @@
     items.forEach((t) => { t.h = t.el.offsetHeight; });
 
     const heights = new Array(cols).fill(0);
-    const bestPos = (span) => {
+    const bestPos = (span, hs) => {
       let best = null;
       for (let c = 0; c + span <= cols; c++) {
-        const slice = heights.slice(c, c + span);
+        const slice = hs.slice(c, c + span);
         const y = Math.max(...slice);
         const waste = slice.reduce((a, h) => a + (y - h), 0);
         if (!best || y < best.y - 0.5 || (Math.abs(y - best.y) <= 0.5 && waste < best.waste)) best = { c, y, waste };
@@ -762,15 +930,27 @@
     let order = 0;
     while (queue.length) {
       let pick = null;
-      for (let k = 0; k < Math.min(4, queue.length); k++) {
-        const pos = bestPos(queue[k].span);
-        const score = pos.waste + k * colW * 0.35;
+      const win = Math.min(4, queue.length);
+      for (let k = 0; k < win; k++) {
+        const it = queue[k];
+        const pos = bestPos(it.span, heights);
+        // Look one step ahead: what gap does this choice force on whatever goes next?
+        const hs = heights.slice();
+        for (let j = pos.c; j < pos.c + it.span; j++) hs[j] = pos.y + it.h + gap;
+        let next = 0;
+        let first = true;
+        for (let j = 0; j < win; j++) {
+          if (j === k) continue;
+          const w = bestPos(queue[j].span, hs).waste + (j - (j > k ? 1 : 0)) * colW * 0.35;
+          if (first || w < next) next = w;
+          first = false;
+        }
+        const score = pos.waste + next + k * colW * 0.35;
         if (!pick || score < pick.score) pick = { k, pos, score };
       }
       const t = queue.splice(pick.k, 1)[0];
       t.x = pick.pos.c * (colW + gap);
       t.y = pick.pos.y;
-      t.col = pick.pos.c;
       for (let j = pick.pos.c; j < pick.pos.c + t.span; j++) heights[j] = t.y + t.h + gap;
       t.el.style.setProperty('--x', `${t.x.toFixed(1)}px`);
       t.el.style.setProperty('--y', `${t.y.toFixed(1)}px`);
@@ -779,10 +959,10 @@
     }
     grid.style.height = `${Math.max(0, Math.max(...heights) - gap)}px`;
     W.gridTop = grid.getBoundingClientRect().top + scrollY;
+    wake();
   }
 
   function applyFilters(animate = true) {
-    const grid = $('#grid');
     const shown = filtered();
     $$('.chip', $('#work')).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.cat === W.cat)));
     $$('[data-fmt]', $('#work')).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.fmt === W.fmt)));
@@ -834,8 +1014,15 @@
     if (W.sort === key) W.dir *= -1; else { W.sort = key; W.dir = key === 'year' || key === 'seconds' ? -1 : 1; }
     const idx = $('#index');
     $$('[data-sort]', idx).forEach((b) => {
-      if (b.dataset.sort === W.sort) b.setAttribute('aria-sort', W.dir > 0 ? 'ascending' : 'descending');
-      else b.removeAttribute('aria-sort');
+      const label = b.dataset.label;
+      if (b.dataset.sort === W.sort) {
+        const dir = W.dir > 0 ? 'ascending' : 'descending';
+        b.dataset.dir = dir;
+        b.setAttribute('aria-label', `${label}, sorted ${dir}`);
+      } else {
+        delete b.dataset.dir;
+        b.setAttribute('aria-label', `Sort by ${label.toLowerCase()}`);
+      }
     });
     const rows = $$('.index__row', idx);
     rows.sort((a, b) => {
@@ -853,38 +1040,55 @@
     const sec = $('#work');
     if (sec.hidden) return;
     const grid = $('#grid');
+    const ctl = $('.work__controls', sec);
     W.tiles = $$('.tile', grid).map((el) => ({ el, p: BY_SLUG.get(el.dataset.slug) }));
+
+    // The sticky bar's height feeds scroll-padding, so focused tiles never hide under it.
+    const syncCtl = () => root.style.setProperty('--controls-h', `${ctl.offsetHeight}px`);
+    syncCtl();
+    if ('ResizeObserver' in window) new ResizeObserver(syncCtl).observe(ctl);
+
+    // After a filter change deep in the grid, bring the results back under the bar.
+    const bringResultsIntoView = () => {
+      const listEl = W.view === 'grid' ? grid : $('#index');
+      const top = listEl.getBoundingClientRect().top;
+      if (top < ctl.getBoundingClientRect().bottom - 1) {
+        const navH = parseFloat(getComputedStyle(root).getPropertyValue('--nav-h')) || 64;
+        const sticky = getComputedStyle(ctl).position === 'sticky';
+        scrollTo({ top: top + scrollY - (sticky ? ctl.offsetHeight : 0) - navH - 16, behavior: reduced ? 'instant' : 'smooth' });
+      }
+    };
 
     sec.addEventListener('click', (e) => {
       const chip = e.target.closest('[data-cat]');
       const fmt = e.target.closest('[data-fmt]');
       const view = e.target.closest('[data-view]');
       const sort = e.target.closest('[data-sort]');
-      if (chip) { W.cat = chip.dataset.cat; applyFilters(true); }
-      else if (fmt) { W.fmt = fmt.dataset.fmt; applyFilters(true); }
-      else if (view) setView(view.dataset.view);
+      if (chip) { bringResultsIntoView(); W.cat = chip.dataset.cat; applyFilters(true); }
+      else if (fmt) { bringResultsIntoView(); W.fmt = fmt.dataset.fmt; applyFilters(true); }
+      else if (view) { bringResultsIntoView(); setView(view.dataset.view); }
       else if (sort) sortIndex(sort.dataset.sort);
-      else if (e.target.closest('[data-reset]')) { W.cat = '*'; W.fmt = '*'; applyFilters(true); }
+      else if (e.target.closest('[data-reset]')) { bringResultsIntoView(); W.cat = '*'; W.fmt = '*'; applyFilters(true); }
     });
 
     setView(store.get('bg-view') || 'grid', false);
     applyFilters(false);
     onResize(() => layoutGrid(false));
     onFontsReady(() => layoutGrid(false));
-    // Posters without declared sizes can shift nothing (aspect-ratio boxes), but fonts can.
     if ('ResizeObserver' in window) {
       let w = grid.clientWidth;
       new ResizeObserver(() => { if (grid.clientWidth !== w) { w = grid.clientWidth; layoutGrid(false); } }).observe(grid);
     }
 
-    // Quick previews: hover on desktop, centre-of-screen autoplay on touch.
+    // Quick previews: hover on desktop, a short dwell in the centre of the screen on touch.
     const tiles = W.tiles.map((t) => t.el);
     const playing = new Set();
+    const previewsOK = () => !reduced && !still;
     if (mqFine.matches) {
       tiles.forEach((el) => {
         const v = $('video', el);
         const m = $('.media', el);
-        el.addEventListener('pointerenter', () => { Media.play(v, true); playing.add(m); });
+        el.addEventListener('pointerenter', () => { if (previewsOK()) { Media.play(v, true); playing.add(m); } });
         el.addEventListener('pointerleave', () => { Media.pause(v); playing.delete(m); });
         el.addEventListener('focus', () => { if (autoplayOK()) { Media.play(v, true); playing.add(m); } });
         el.addEventListener('blur', () => { Media.pause(v); playing.delete(m); });
@@ -892,11 +1096,16 @@
     } else if ('IntersectionObserver' in window) {
       const band = new IntersectionObserver((entries) => {
         entries.forEach((en) => {
-          const m = $('.media', en.target);
-          const v = $('video', en.target);
+          const el = en.target;
+          const m = $('.media', el);
+          const v = $('video', el);
+          clearTimeout(el._bandT);
           if (en.isIntersecting && autoplayOK()) {
-            Media.play(v); playing.add(m);
-            if (playing.size > 2) { const first = playing.values().next().value; Media.pause($('video', first)); playing.delete(first); }
+            // A fling passes straight through: only tiles that stay a moment start loading.
+            el._bandT = setTimeout(() => {
+              Media.play(v); playing.add(m);
+              if (playing.size > 2) { const first = playing.values().next().value; Media.pause($('video', first)); playing.delete(first); }
+            }, 300);
           } else { Media.pause(v); playing.delete(m); }
         });
       }, { rootMargin: '-38% 0px -38% 0px' });
@@ -906,27 +1115,37 @@
     // Preview progress lines + a gentle parallax inside each thumbnail.
     const onScreen = new Set();
     if ('IntersectionObserver' in window) {
+      const byEl = new Map(W.tiles.map((t) => [t.el, t]));
       const vis = new IntersectionObserver((entries) => entries.forEach((en) => {
-        const t = W.tiles.find((x) => x.el === en.target);
-        if (en.isIntersecting) onScreen.add(t); else onScreen.delete(t);
-      }), { rootMargin: '100px 0px' });
+        const t = byEl.get(en.target);
+        if (en.isIntersecting) onScreen.add(t);
+        else {
+          onScreen.delete(t);
+          // Far off screen: let go of the preview's buffer (the poster stays).
+          Media.release($('video', en.target));
+        }
+      }), { rootMargin: '200px 0px' });
       tiles.forEach((el) => vis.observe(el));
     }
-    tickers.add(() => {
+    let lastSy = -1;
+    addTicker(() => {
       playing.forEach((m) => {
         const v = $('video', m);
         if (v && v.duration) m.style.setProperty('--prog', (v.currentTime / v.duration).toFixed(4));
       });
-      if (reduced || W.view !== 'grid') return;
-      onScreen.forEach((t) => {
-        if (!t || t.mh == null) return;
-        const center = W.gridTop + t.y + t.mh / 2 - S.sy - S.vh / 2;
-        const par = clamp(-center / S.vh, -1, 1) * t.mh * 0.035;
-        if (t.par === undefined || Math.abs(par - t.par) > 0.1) {
-          t.el.style.setProperty('--par', `${par.toFixed(1)}px`);
-          t.par = par;
-        }
-      });
+      if (!reduced && W.view === 'grid' && S.sy !== lastSy) {
+        lastSy = S.sy;
+        onScreen.forEach((t) => {
+          if (!t || t.mh == null) return;
+          const center = W.gridTop + t.y + t.mh / 2 - S.sy - S.vh / 2;
+          const par = clamp(-center / S.vh, -1, 1) * t.mh * 0.035;
+          if (t.par === undefined || Math.abs(par - t.par) > 0.1) {
+            t.el.style.setProperty('--par', `${par.toFixed(1)}px`);
+            t.par = par;
+          }
+        });
+      }
+      return playing.size > 0;
     });
     initFloat();
   }
@@ -951,10 +1170,11 @@
         cache.set(p.slug, node);
       }
       fl.replaceChildren(node);
-      fl.style.setProperty('--fw', p.vertical ? '210px' : '360px');
-      Media.play($('video', node), true);
+      fl.style.setProperty('--fw', p.vertical ? '210px' : `${Math.round(Math.min(380, 214 * p.aspect))}px`);
+      if (!reduced && !still) Media.play($('video', node), true);
       cur = node;
       fl.classList.add('is-on');
+      wake();
     };
     const hide = () => { fl.classList.remove('is-on'); if (cur) Media.pause($('video', cur)); };
     idx.addEventListener('pointerover', (e) => {
@@ -965,8 +1185,8 @@
     });
     idx.addEventListener('pointerleave', hide);
     addEventListener('scroll', () => { if (fl.classList.contains('is-on') && !idx.matches(':hover')) hide(); }, { passive: true });
-    tickers.add((dt) => {
-      if (!fl.classList.contains('is-on')) { x = S.px; y = S.py; return; }
+    addTicker((dt) => {
+      if (!fl.classList.contains('is-on')) { x = S.px; y = S.py; return false; }
       const k = 1 - Math.exp(-dt * 10);
       const dx = S.px - x;
       x += dx * k;
@@ -977,6 +1197,7 @@
       const left = S.px + w + 48 > S.vw ? x - w - 32 : x + 32;
       const top = clamp(y - h / 2, 16, S.vh - h - 60);
       fl.style.transform = `translate3d(${left.toFixed(1)}px, ${top.toFixed(1)}px, 0) rotate(${reduced ? 0 : tilt.toFixed(2)}deg)`;
+      return Math.abs(dx) > 0.3 || Math.abs(S.py - y) > 0.3 || Math.abs(tilt) > 0.05;
     });
   }
 
@@ -1014,15 +1235,16 @@
     const words = $$('.w', st);
     const n = words.length;
     let last = -1;
-    tickers.add(() => {
-      if (reduced) { if (last !== n) { words.forEach((w) => w.style.setProperty('--o', 1)); last = n; } return; }
+    addTicker(() => {
+      if (reduced) { if (last !== n) { words.forEach((w) => w.style.setProperty('--o', 1)); last = n; } return false; }
       const r = st.getBoundingClientRect();
-      if (r.bottom < -100 || r.top > S.vh + 100) return;
+      if (r.bottom < -100 || r.top > S.vh + 100) return false;
       const p = clamp((S.vh * 0.85 - r.top) / (r.height + S.vh * 0.35), 0, 1);
       const lit = p * (n + 3);
-      if (Math.abs(lit - last) < 0.02) return;
+      if (Math.abs(lit - last) < 0.02) return false;
       last = lit;
       words.forEach((w, i) => w.style.setProperty('--o', clamp(lit - i, 0.16, 1).toFixed(3)));
+      return false;
     });
   }
 
@@ -1031,7 +1253,6 @@
     const sec = $('#contact');
     const lines = list(CONTACT.title).length ? list(CONTACT.title) : ["Let's talk"];
     const email = SITE.email || '';
-    let tzLabel = SITE.timezone || '';
     sec.innerHTML = `
       <div class="contact__inner">
         <p class="eyebrow mono">Contact</p>
@@ -1043,7 +1264,7 @@
         </div>` : ''}
         <div class="contact__cols">
           ${list(SITE.socials).length ? `<div><h3 class="mono">Elsewhere</h3><ul>${list(SITE.socials).map((s) => `<li><a class="link-arrow" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)} ${ICON.out}</a></li>`).join('')}</ul></div>` : ''}
-          <div><h3 class="mono">Local time</h3><p class="clock" data-clock>--:--:--</p><p class="mono" style="color:var(--ink-3)">${esc(tzLabel)}</p></div>
+          <div><h3 class="mono">Local time</h3><p class="clock" data-clock>--:--:--</p><p class="mono" style="color:var(--ink-3)">${esc(SITE.timezone || '')}</p></div>
           ${SITE.availability ? `<div><h3 class="mono">Availability</h3><p class="status mono${SITE.available === false ? ' status--off' : ''}"><i class="status__dot"></i>${esc(SITE.availability)}</p></div>` : ''}
         </div>
       </div>`;
@@ -1067,9 +1288,10 @@
       new IntersectionObserver(([en]) => {
         contactKinetic.visible = en.isIntersecting;
         if (en.isIntersecting) contactKinetic.start(0);
+        wake();
       }, { threshold: 0.2 }).observe(title);
     } else contactKinetic.start(0);
-    tickers.add((dt, now) => contactKinetic.update(dt, now));
+    addTicker((dt, now) => contactKinetic.update(dt, now));
 
     const clockEl = $('[data-clock]', sec);
     let fmt;
@@ -1096,6 +1318,9 @@
     const secs = [['top', 'Reel'], ['highlights', 'Selected'], ['work', 'Work'], ['about', 'About'], ['contact', 'Contact']]
       .filter(([id]) => { const el = document.getElementById(id); return el && !el.hidden; });
     rail.innerHTML = `
+      <button class="rail__motion" type="button" data-motion aria-pressed="false" aria-label="Pause motion" title="Pause motion">
+        <span class="i-pause">${ICON.pause}</span><span class="i-play">${ICON.play}</span>
+      </button>
       <span class="rail__tc mono" aria-hidden="true">00:00:00:00</span>
       <div class="rail__track">
         <div class="rail__done"></div>
@@ -1114,6 +1339,7 @@
       el.style.setProperty('--at', at.toFixed(4));
       return { el, id: el.dataset.jump, at, top };
     });
+    wake();
   }
   function initRail() {
     const rail = $('#rail');
@@ -1143,10 +1369,11 @@
     track.addEventListener('pointercancel', end);
 
     let lastTc = '';
+    let lastP = -1;
     let lastActive = '';
-    tickers.add(() => {
+    addTicker(() => {
       const p = clamp(S.sy / RAIL.max, 0, 1);
-      track.style.setProperty('--p', p.toFixed(4));
+      if (Math.abs(p - lastP) > 0.00005) { track.style.setProperty('--p', p.toFixed(4)); lastP = p; }
       const t = timecode(p * totalRuntime, FPS);
       if (t !== lastTc) { tc.textContent = t; lastTc = t; }
       let active = '';
@@ -1160,6 +1387,7 @@
         RAIL.keys.forEach((k) => k.el.classList.toggle('is-active', k.id === active));
         navLinks.forEach((a) => a.setAttribute('aria-current', String(a.dataset.section === active)));
       }
+      return false;
     });
   }
 
@@ -1181,12 +1409,13 @@
       } else cur.classList.remove('is-on');
     });
     root.addEventListener('mouseleave', () => { target = null; cur.classList.remove('is-on'); });
-    tickers.add((dt) => {
+    addTicker((dt) => {
       const k = reduced ? 1 : 1 - Math.exp(-dt * 16);
       x += (S.px - x) * k;
       y += (S.py - y) * k;
       cur.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0)`;
-    });
+      return Math.abs(S.px - x) > 0.3 || Math.abs(S.py - y) > 0.3;
+    }, false);
   }
 
   function initTheme() {
@@ -1252,12 +1481,12 @@
       el.className = 'player';
       el.innerHTML = `
         <video playsinline preload="metadata"></video>
-        <button class="player__big" type="button" aria-label="Play">${ICON.play}</button>
+        <button class="player__big" type="button" tabindex="-1" aria-hidden="true">${ICON.play}</button>
         <div class="player__spinner" aria-hidden="true"></div>
         <button class="player__unmute mono" type="button">${ICON.sound}Sound on</button>
         <p class="player__error mono" role="alert"><b>Video unavailable</b><span data-err></span></p>
         <div class="player__ui">
-          <button class="player__btn" type="button" data-act="play" aria-label="Play or pause">
+          <button class="player__btn" type="button" data-act="play" aria-label="Play">
             <span class="i-play">${ICON.play}</span><span class="i-pause">${ICON.pause}</span>
           </button>
           <span class="player__tc mono" aria-hidden="true">00:00:00:00</span>
@@ -1268,7 +1497,7 @@
           </div>
           <span class="player__dur mono" aria-hidden="true">00:00:00:00</span>
           <span class="player__fps mono" aria-hidden="true"></span>
-          <button class="player__btn" type="button" data-act="mute" aria-label="Mute or unmute">
+          <button class="player__btn" type="button" data-act="mute" aria-label="Mute">
             <span class="i-sound">${ICON.sound}</span><span class="i-muted">${ICON.muted}</span>
           </button>
           <button class="player__btn" type="button" data-act="fs" aria-label="Fullscreen">
@@ -1282,15 +1511,24 @@
       this.fpsEl = $('.player__fps', el);
       this.scrub = $('.player__scrub', el);
       this.hoverEl = $('.player__hover', el);
+      this.playBtn = $('[data-act="play"]', el);
+      this.muteBtn = $('[data-act="mute"]', el);
+      this.fsBtn = $('[data-act="fs"]', el);
       this.fps = FPS;
       this.idleTimer = 0;
       this.bind();
     }
-    set(k, v) { this.el.dataset[k] = String(v); }
+    set(k, v) {
+      this.el.dataset[k] = String(v);
+      // Keep the toggles' names in step with what they will do next.
+      if (k === 'playing') this.playBtn.setAttribute('aria-label', v ? 'Pause' : 'Play');
+      if (k === 'muted') this.muteBtn.setAttribute('aria-label', v ? 'Unmute' : 'Mute');
+      if (k === 'fs') this.fsBtn.setAttribute('aria-label', v ? 'Exit fullscreen' : 'Fullscreen');
+    }
     bind() {
       const v = this.v;
       const el = this.el;
-      v.addEventListener('play', () => { this.set('playing', true); this.set('ended', false); this.poke(); });
+      v.addEventListener('play', () => { this.set('playing', true); this.set('ended', false); this.poke(); wake(); });
       v.addEventListener('pause', () => { this.set('playing', false); this.poke(); });
       v.addEventListener('ended', () => { this.set('playing', false); this.set('ended', true); });
       v.addEventListener('waiting', () => this.set('waiting', true));
@@ -1308,6 +1546,7 @@
         const src = v.getAttribute('src');
         $('[data-err]', el).textContent = src.startsWith('blob:') ? '' : src;
       });
+      ['seeked', 'progress', 'loadedmetadata', 'ended', 'timeupdate'].forEach((ev) => v.addEventListener(ev, () => this.render()));
       v.addEventListener('click', () => this.toggle());
       v.addEventListener('dblclick', () => this.fullscreen());
       $('.player__big', el).addEventListener('click', () => this.toggle());
@@ -1320,6 +1559,8 @@
         if (b.dataset.act === 'fs') this.fullscreen();
       });
       el.addEventListener('pointermove', () => this.poke());
+      el.addEventListener('focusin', () => this.poke());
+      el.addEventListener('keydown', () => this.poke());
       document.addEventListener('fullscreenchange', () => this.set('fs', document.fullscreenElement === el));
 
       const sc = this.scrub;
@@ -1375,14 +1616,15 @@
       const v = this.v;
       v.muted = !withSound;
       this.set('muted', v.muted);
+      const src = v.getAttribute('src');
       const pr = v.play();
       if (pr && pr.catch) {
-        pr.catch(() => {
-          // Browsers block sound without a click: fall back to a muted start.
-          if (!v.muted) {
-            v.muted = true; this.set('automuted', true);
-            v.play().catch(() => { this.set('playing', false); this.set('automuted', false); });
-          }
+        pr.catch((err) => {
+          // Only a real autoplay block falls back to a muted start. pause() or a new
+          // source also reject a pending play() (AbortError): leave those alone.
+          if (!err || err.name !== 'NotAllowedError' || v.muted || v.getAttribute('src') !== src) return;
+          v.muted = true; this.set('automuted', true);
+          v.play().catch(() => { this.set('playing', false); this.set('automuted', false); });
         });
       }
     }
@@ -1410,8 +1652,9 @@
     stepFrames(n) {
       const v = this.v;
       v.pause();
-      const f = Math.round(v.currentTime * this.fps) + n;
-      this.seekTo((f + 0.1) / this.fps);
+      // The frame on screen is the one the timecode shows; land in the middle of the next one.
+      const f = Math.floor(v.currentTime * this.fps + 1e-3) + n;
+      this.seekTo((f + 0.5) / this.fps);
     }
     fullscreen() {
       const el = this.el;
@@ -1437,8 +1680,10 @@
     ignorePop: false,
     current: null,
     list: [],
+    stageMode: 'video',
     init() {
       this.el = $('#viewer');
+      this.el.tabIndex = -1;
       this.el.innerHTML = `
         <div class="viewer__bar">
           <button class="viewer__close mono" type="button" data-close>${ICON.close}<span>Close</span><kbd>Esc</kbd></button>
@@ -1461,9 +1706,11 @@
         if (e.target.closest('[data-share]')) copyText(location.href, 'Link copied');
       });
       addEventListener('keydown', (e) => this.onKey(e));
-      // Timecode + progress follow the frame loop while playing, and events while paused.
-      tickers.add(() => { if (this.isOpen && this.stageMode === 'video' && !this.player.v.paused) this.player.render(); });
-      ['seeked', 'progress', 'loadedmetadata', 'ended'].forEach((ev) => this.player.v.addEventListener(ev, () => this.player.render()));
+      // Timecode + progress follow the frame loop while playing.
+      addTicker(() => {
+        if (this.isOpen && this.stageMode === 'video' && !this.player.v.paused) { this.player.render(); return true; }
+        return false;
+      }, false);
     },
     listFor(p) {
       if (p.isReel) return [p];
@@ -1504,6 +1751,9 @@
       }
       const active = document.activeElement;
       this.returnFocus = (active && active.closest && active.closest('a, button')) || active;
+      // Background loops stop while the viewer covers the page; they resume on close.
+      this.paused = $$('#main video').filter((v) => !v.paused);
+      this.paused.forEach((v) => v.pause());
       const show = () => {
         this.el.hidden = false;
         this.isOpen = true;
@@ -1511,8 +1761,10 @@
         const sbw = innerWidth - root.clientWidth;
         root.style.setProperty('--sbw', `${sbw}px`);
         root.classList.add('is-locked', 'is-viewer-open');
-        ['#nav', '#main', '#footer', '#rail', '#menu'].forEach((s) => { const n = $(s); if (n) n.inert = true; });
-        $('[data-close]', this.el).focus({ preventScroll: true });
+        ['#nav', '#main', '#footer', '#rail', '#menu', '.skip'].forEach((s) => { const n = $(s); if (n) n.inert = true; });
+        // Focus the dialog itself: Space then plays/pauses instead of pressing Close.
+        this.el.focus({ preventScroll: true });
+        wake();
       };
       const from = origin && this.visible(origin) ? origin : null;
       if (from && hasVT && !reduced) {
@@ -1542,7 +1794,7 @@
       const finish = () => {
         this.el.hidden = true;
         root.classList.remove('is-locked', 'is-viewer-open');
-        ['#nav', '#main', '#footer', '#rail'].forEach((s) => { const n = $(s); if (n) n.inert = false; });
+        ['#nav', '#main', '#footer', '#rail', '.skip'].forEach((s) => { const n = $(s); if (n) n.inert = false; });
         this.player.unload();
         this.content.innerHTML = '';
         this.isOpen = false;
@@ -1550,9 +1802,12 @@
         this.closing = false;
         this.scroller.scrollTop = 0;
         document.title = baseTitle;
+        if (autoplayOK()) (this.paused || []).forEach((v) => { if (v.closest('.hero__media, .hl__link')) Media.play(v); });
+        this.paused = [];
         const back = this.returnFocus && document.contains(this.returnFocus) ? this.returnFocus : null;
         if (back) back.focus({ preventScroll: true });
         this.returnFocus = null;
+        wake();
       };
       const target = p ? this.originFor(p) : null;
       if (target && hasVT && !reduced && this.stage) {
@@ -1588,7 +1843,7 @@
       const L = this.list;
       const i = L.indexOf(p);
       const n = L.length;
-      this.count.textContent = p.isReel ? p.title : `${pad(i + 1)} / ${pad(n)}`;
+      this.count.innerHTML = p.isReel ? `<b>${esc(p.title)}</b>` : `<b>${esc(p.title)}</b><span> · ${pad(i + 1)} / ${pad(n)}</span>`;
       this.navEl.hidden = n < 2;
       const next = n > 1 ? L[(i + 1) % n] : null;
       const specs = [
@@ -1601,9 +1856,9 @@
         ['Frame rate', `${Math.round(p.fps * 100) / 100} fps`],
         ['Length', p.seconds ? timecode(p.seconds, p.fps) : '', 'len'],
       ].filter(([, v, k]) => v || k);
-      const embed = !p.video && (p.vimeo || p.youtube);
+      const embed = p.embed;
       const keys = mqFine.matches && !embed
-        ? '<p class="mono" style="color:var(--ink-3)"><kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> 5 s · <kbd>,</kbd><kbd>.</kbd> one frame · <kbd>[</kbd><kbd>]</kbd> project · <kbd>F</kbd> fullscreen · <kbd>M</kbd> mute</p>'
+        ? '<p class="mono viewer__keys"><kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> 5 s · <kbd>,</kbd><kbd>.</kbd> one frame · <kbd>[</kbd><kbd>]</kbd> project · <kbd>F</kbd> fullscreen · <kbd>M</kbd> mute</p>'
         : '';
 
       this.content.innerHTML = `
@@ -1638,10 +1893,7 @@
       if (embed) {
         this.stageMode = 'embed';
         this.player.unload();
-        const src = p.vimeo
-          ? `https://player.vimeo.com/video/${encodeURIComponent(p.vimeo)}?autoplay=1&title=0&byline=0&portrait=0&dnt=1`
-          : `https://www.youtube-nocookie.com/embed/${encodeURIComponent(p.youtube)}?autoplay=1&rel=0&playsinline=1`;
-        this.stage.innerHTML = `<iframe src="${src}" title="${esc(p.title)}" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`;
+        this.stage.innerHTML = `<iframe src="${esc(embed)}" title="${esc(p.title)}" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`;
       } else {
         this.stageMode = 'video';
         this.player.load(p);
@@ -1651,12 +1903,16 @@
           const len = $('[data-spec="len"]', this.content);
           if (res && v.videoWidth) res.textContent = `${v.videoWidth} × ${v.videoHeight}`;
           if (len && !p.seconds && v.duration) len.textContent = timecode(v.duration, p.fps);
+          if (p.isReel && !p.seconds && v.duration) {
+            const lenEl = $('[data-reel-len]');
+            if (lenEl) lenEl.textContent = clock(v.duration);
+          }
         };
       }
       const up = $('.upnext', this.content);
       if (up) {
         const v = $('video', up);
-        up.addEventListener('pointerenter', () => Media.play(v, true));
+        up.addEventListener('pointerenter', () => { if (!reduced && !still) Media.play(v, true); });
         up.addEventListener('pointerleave', () => Media.pause(v));
       }
       this.scroller.scrollTop = 0;
@@ -1671,7 +1927,8 @@
       const tag = e.target.closest('input, textarea, select, [contenteditable="true"]');
       if (tag) return;
       const pl = this.player;
-      const onControl = e.target.closest('button, a, [role="slider"]');
+      // Buttons and links keep Space/Enter for themselves; the seek slider does not.
+      const onControl = e.target.closest('button, a');
       const video = this.stageMode === 'video';
       switch (e.key) {
         case ' ':
@@ -1693,12 +1950,10 @@
   };
 
   /* ---------- Router + global clicks ---------- */
-  const baseTitle = `${SITE.name || 'Portfolio'}${SITE.role ? ` — ${SITE.role}` : ''}`;
-
   function route(initial) {
     let h = '';
     try { h = decodeURIComponent(location.hash.slice(1)); } catch (e) { h = location.hash.slice(1); }
-    const p = BY_SLUG.get(h) || (h === 'showreel' ? currentReel() : null);
+    const p = BY_SLUG.get(h) || (h === 'showreel' ? viewerReel() : null);
     if (p) {
       if (!Viewer.isOpen || Viewer.current.slug !== p.slug) Viewer.open(p, { history: 'none', gesture: false });
       return;
@@ -1714,13 +1969,17 @@
     route(false);
   }
 
+  /** Scroll to a section and move keyboard focus there too, so the next Tab continues from it. */
   function scrollToEl(el, instant) {
     const y = el.id === 'top' ? 0 : el.getBoundingClientRect().top + scrollY;
     scrollTo({ top: y, behavior: instant || reduced ? 'instant' : 'smooth' });
+    if (!el.hasAttribute('tabindex') && !el.matches('a, button, input, select, textarea')) el.setAttribute('tabindex', '-1');
+    el.focus({ preventScroll: true });
   }
 
   function initClicks() {
     document.addEventListener('click', (e) => {
+      wake();
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const open = e.target.closest('[data-open]');
       if (open) {
@@ -1733,12 +1992,13 @@
       }
       if (e.target.closest('[data-open-reel]')) {
         e.preventDefault();
-        Viewer.open(currentReel(), { origin: $('.hero__media'), gesture: true });
+        Viewer.open(viewerReel(), { origin: $('.hero__media'), gesture: true });
         return;
       }
+      if (e.target.closest('[data-motion]')) { setStill(!still); return; }
       const copy = e.target.closest('[data-copy]');
       if (copy) { copyText(copy.dataset.copy, 'Email copied'); return; }
-      if (e.target.closest('[data-rewind]')) { scrollTo({ top: 0, behavior: reduced ? 'instant' : 'smooth' }); return; }
+      if (e.target.closest('[data-rewind]')) { scrollToEl($('#top')); return; }
       const jump = e.target.closest('[data-jump]');
       if (jump) { const el = document.getElementById(jump.dataset.jump); if (el) scrollToEl(el); return; }
       const a = e.target.closest('a[href^="#"]');
@@ -1761,14 +2021,16 @@
   addEventListener('resize', () => {
     clearTimeout(rTimer);
     rTimer = setTimeout(() => {
-      // Mobile browsers resize the viewport when the URL bar hides: ignore small height-only changes.
+      // Phone browsers resize the viewport as the URL bar hides: ignore those small height-only changes.
       const dw = Math.abs(innerWidth - lastW);
       const dh = Math.abs(innerHeight - lastH);
-      if (!dw && dh < 120) return;
+      if (!dw && dh < 120 && mqCoarse.matches) return;
+      if (!dw && !dh) return;
       lastW = innerWidth; lastH = innerHeight;
       S.vw = innerWidth; S.vh = innerHeight;
       resizeFns.forEach((fn) => safe(fn));
       requestRailMeasure();
+      wake();
     }, 140);
   });
 
@@ -1776,40 +2038,48 @@
   function boot() {
     root.classList.add('js');
     document.title = baseTitle;
-    safe(makeNoise);
+    if (still) root.classList.add('is-still');
+
+    // First screen: nav, hero and the viewer (so deep links and the reel button work at once).
     safe(renderNav);
     safe(renderHero);
-    safe(renderHighlights);
-    safe(renderWork);
-    safe(renderAbout);
-    safe(renderContact);
-    safe(renderRail);
     safe(() => Viewer.init());
-
     safe(initTheme);
     safe(initNavBehavior);
     safe(initHero);
-    safe(initHighlights);
-    safe(initMarquee);
-    safe(initWork);
-    safe(initAbout);
-    safe(initContact);
-    safe(initRail);
-    safe(initCursor);
     safe(initClicks);
-    safe(initReveal);
-
     addEventListener('popstate', onHistory);
     addEventListener('hashchange', onHistory);
-    mqReduce.addEventListener && mqReduce.addEventListener('change', (e) => { reduced = e.matches; });
+    mqReduce.addEventListener && mqReduce.addEventListener('change', (e) => { reduced = e.matches; wake(); });
+    wake();
 
-    const fontsDone = () => { fontFns.forEach((fn) => safe(fn)); requestRailMeasure(); };
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fontsDone);
-    addEventListener('load', fontsDone);
+    // Everything below the fold follows in a second task, after the first paint.
+    const rest = () => {
+      safe(makeNoise);
+      safe(renderHighlights);
+      safe(renderWork);
+      safe(renderAbout);
+      safe(renderContact);
+      safe(renderRail);
+      safe(initHighlights);
+      safe(initMarquee);
+      safe(initWork);
+      safe(initAbout);
+      safe(initContact);
+      safe(initRail);
+      safe(initCursor);
+      safe(initReveal);
+      safe(() => setStill(still, false));
 
-    requestAnimationFrame(frame);
-    safe(() => route(true));
-    root.classList.add('is-ready');
+      const fontsDone = () => { fontFns.forEach((fn) => safe(fn)); requestRailMeasure(); };
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(fontsDone);
+      addEventListener('load', fontsDone);
+      safe(() => route(true));
+      root.classList.add('is-ready');
+    };
+    // With a #hash the whole page is needed before routing, so do it all now.
+    if (location.hash) rest();
+    else requestAnimationFrame(() => setTimeout(rest, 0));
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

@@ -5,8 +5,9 @@
    from the object below. Save the file and refresh the page.
 
    Paths are relative to index.html, e.g. "media/my-project/video.mp4".
-   Run `tools/encode.sh` on a master file to create the video, preview and
-   poster for a project in one go (see README.md).
+   Run `bash tools/encode.sh "<your videos folder>"` to create the video,
+   preview and poster for every project in one go, plus ready-to-paste
+   blocks for the list below (see README.md).
 
    All projects, clients and credits below are fictional samples.
    ========================================================================== */
@@ -41,9 +42,10 @@ window.PORTFOLIO = {
       videoVertical: "media/reel/reel-vertical.mp4",  // optional: used on phones held upright (9:16)
       poster: "media/reel/poster.jpg",
       posterVertical: "media/reel/poster-vertical.jpg",
-      full: "",            // optional: longer reel with sound for the "Play showreel" button
-      fullVertical: "",    // optional
-      duration: "0:17",
+      full: "",            // optional: longer cut with sound for the "Play showreel" button
+      fullVertical: "",    // optional: the same for phones held upright
+      duration: "0:17",           // length of what "Play showreel" plays (full, or video if no full)
+      durationVertical: "0:12",   // the same on phones held upright
       fps: 30
     }
   },
@@ -64,13 +66,18 @@ window.PORTFOLIO = {
      preview:     optional short, light, muted loop for hover previews
                   (falls back to `video`)
      poster:      still image shown before anything plays
-     vimeo:       optional Vimeo ID, used instead of `video` in the viewer
-     youtube:     optional YouTube ID, used instead of `video` in the viewer
+     vimeo:       optional Vimeo ID or link (unlisted links work too); when set,
+                  the viewer plays it instead of `video`
+     youtube:     optional YouTube ID or link; when set, the viewer plays it
+                  instead of `video`
      duration:    "m:ss", shown on thumbnails
      fps:         frame rate for the viewer's timecode
      color:       dominant color, painted while the poster loads
      categories:  filter chips are built from these automatically
+     links:       optional [{ label: "Case study", url: "https://..." }]
      hidden:      true keeps a project in the file but off the site
+     slug:        the link name (yoursite/#slug); must be unique and not one of
+                  top, highlights, work, about, contact
      ------------------------------------------------------------------------ */
   projects: [
     {

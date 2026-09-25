@@ -15,7 +15,7 @@ The page works like a composition on a timeline. Your scroll position is a playh
 - **Filters.** Discipline chips (built automatically from your categories, with After Effects label colors), a format filter (All / 16:9 / 9:16), and a **Grid ↔ Index** toggle. The index is a sortable list with a preview that follows the cursor.
 - **Project viewer.** Opens as a full-screen page with a shareable link (`yoursite.com/#project-slug`). The thumbnail morphs into the player. It includes a custom player with SMPTE timecode at the project's frame rate, frame stepping, scrubbing, fullscreen and keyboard shortcuts, plus the project's details, credits and a "Next project" link. Vimeo and YouTube embeds work too.
 - **About and contact.** A statement whose words light up as you scroll, lists of services, tools and clients, a copy-email button, live local time and availability.
-- **Timeline bar.** Shows the scroll position as a timecode. Click a keyframe to jump to that section, or drag along the bar to scrub through the page.
+- **Timeline bar.** Shows the scroll position as a timecode. Click a keyframe to jump to that section, or drag along the bar to scrub through the page. Its pause button stops everything that moves by itself (background reels, the moving title, the scrolling band).
 - **Dark and light themes** with a toggle. Film grain textures the background but never your videos.
 - **Accessibility and performance.** Respects reduced motion (no autoplay, no parallax) and Data Saver. Videos load only when needed and pause off-screen. Full keyboard support and visible focus states.
 
@@ -29,17 +29,36 @@ The page works like a composition on a timeline. Your scroll position is a playh
 2. Edit **`content.js`**. It's the only file you need to touch. Your name, reel, projects, about text and contact details all live there.
 3. Replace the sample clips in `media/` with your own (see below), then delete the sample folders you no longer use.
 
-## Adding your work
+## Adding your videos, step by step
 
-### 1. Encode your masters
+You only do steps 1–2 once.
 
-`tools/encode.sh` turns a master render (ProRes, MOV, MP4…) into web-ready files. It needs [ffmpeg](https://ffmpeg.org/download.html): on macOS run `brew install ffmpeg`, on Windows use Git Bash or WSL.
+1. **Install ffmpeg.** On a Mac: install [Homebrew](https://brew.sh), then run `brew install ffmpeg` in Terminal. On Windows: run `winget install Gyan.FFmpeg` in PowerShell, then install [Git for Windows](https://git-scm.com/download/win), which includes **Git Bash**.
+2. **Get this site on your computer.** On GitHub, click **Code → Download ZIP** and unzip it, or use GitHub Desktop.
+3. **Open a terminal in the site folder.** On a Mac, right-click the folder and choose **New Terminal at Folder**. On Windows, right-click the folder and choose **Open Git Bash here**.
+4. **Encode your whole videos folder in one go.** Type `bash tools/encode.sh `, then drag your videos folder onto the terminal window so its path is filled in, and press Enter:
+   ```bash
+   bash tools/encode.sh "/Users/you/Desktop/videos portfolio"
+   ```
+   Every video inside (MOV, MP4, ProRes…) becomes a web-ready set in `media/<name>/`. A ready-made block for each one is saved in `tools/new-projects.txt`. Run it again after adding more videos: the ones already done are skipped.
+5. **Describe your projects.** Open `content.js` in any text editor. Delete the sample projects and paste in the blocks from `tools/new-projects.txt`. For each project, fill in the title, client, categories, summary and so on.
+6. **Pick your highlights and reel.** Put your best slugs in `highlights`, and point `hero.reel` at your showreel (encode it the same way).
+7. **Remove the samples.** Delete the sample folders in `media/` that you no longer use.
+8. **Check it.** Double-click `index.html`.
+9. **Upload.** On GitHub, go to **Add file → Upload files**, drag in `content.js` and your new `media` folders, and click **Commit changes**. The web uploader accepts files up to 25 MB. For bigger videos, use GitHub Desktop (up to 100 MB per file), or host the full video on Vimeo (see below).
+
+## Reference
+
+### Encoding options
+
+`tools/encode.sh` turns master renders into web-ready files. It accepts a folder, several files, or one file plus the link name you want:
 
 ```bash
-tools/encode.sh ~/Renders/Halden_Ident_v12.mov signal-bloom
+bash tools/encode.sh ~/Desktop/"videos portfolio"          # every video in the folder
+bash tools/encode.sh ~/Renders/Halden_Ident_v12.mov signal-bloom
 ```
 
-This creates `media/signal-bloom/` containing:
+For each video it creates `media/<slug>/` containing:
 
 | File | What it is | Typical size |
 | --- | --- | --- |
@@ -47,15 +66,15 @@ This creates `media/signal-bloom/` containing:
 | `preview.mp4` | Silent 6-second loop at 960px for hover previews | 0.5–2 MB |
 | `poster.jpg` | Still frame shown before playback | 100–250 KB |
 
-It also prints a block you can paste into `content.js`, with the format, duration, frame rate and dominant color already filled in.
+Each project's block has the format, duration, frame rate and dominant color already filled in.
 
-Options: `POSTER_AT=4` picks the poster frame (seconds), `PREVIEW_START=3 PREVIEW_LEN=6` picks the preview loop, and `CRF=20` raises quality (lower number = better and larger). To encode a whole folder:
+Options go before the command. `POSTER_AT=4` picks the poster frame (seconds), `PREVIEW_START=3 PREVIEW_LEN=6` picks the preview loop, `CRF=20` raises quality (lower number = better and larger), and `FORCE=1` re-encodes videos that were already done. For example:
 
 ```bash
-for f in renders/*.mov; do tools/encode.sh "$f"; done
+POSTER_AT=4 CRF=20 bash tools/encode.sh ~/Desktop/"videos portfolio"
 ```
 
-### 2. Describe the project in `content.js`
+### Project fields in `content.js`
 
 ```js
 {
@@ -81,18 +100,18 @@ for f in renders/*.mov; do tools/encode.sh "$f"; done
 }
 ```
 
-Only `title`, `format` and `video` (or `vimeo` / `youtube`) are required. Projects appear in the grid in the order you list them. Set `hidden: true` to keep a project in the file but off the site.
+Only `title`, `format` and `video` (or `vimeo` / `youtube`) are required. Projects appear in the grid in the order you list them. Set `hidden: true` to keep a project in the file but off the site. Each `slug` must be unique and must not be `top`, `highlights`, `work`, `about` or `contact`, because those are the page's own sections.
 
 **Selected work** uses the `highlights` list of slugs, in that order. If that list is empty, it uses every project marked `featured: true`.
 
-**Hero reel.** Set `hero.reel.video` (16:9 loop), and optionally `videoVertical` (9:16 loop for phones). If you have a longer cut with sound for the "Play showreel" button, set it as `full`, and `fullVertical` for phones.
+**Hero reel.** Set `hero.reel.video` (a muted 16:9 loop behind the title), and optionally `videoVertical` (a 9:16 loop for phones held upright). If you have a longer cut with sound for the "Play showreel" button, set it as `full`, and `fullVertical` for phones. Set `duration` (and `durationVertical`) to the length of what the button plays.
 
 ### Hosting large videos elsewhere
 
 GitHub rejects single files over 100 MB, and Pages sites should stay under 1 GB in total. The encoder defaults keep most pieces well under that. For long films you have three options:
 
 - Put a full URL in `video`, e.g. a file on Cloudflare R2, Bunny or S3 (`video: "https://cdn.example.com/reel.mp4"`).
-- Use `vimeo: "123456789"` or `youtube: "dQw4w9WgXcQ"` instead of `video`. The viewer embeds their player, and your hover preview still comes from `preview`.
+- Set `vimeo` or `youtube` to the video's ID or just paste its link (unlisted Vimeo links work too). When set, the viewer embeds that player instead of `video`, and your hover preview still comes from `preview`.
 - Keep `preview` and `poster` in this repo either way, so the grid stays fast.
 
 ## Publishing on GitHub Pages
@@ -128,16 +147,19 @@ Before publishing, update the `<title>`, `description` and `og:` tags at the top
 | `M` | Mute |
 | `Esc` | Close |
 
+Visitors can pause all background motion with the pause button at the left of the timeline bar. Their choice is remembered. Anyone whose system asks for reduced motion gets a still page automatically.
+
 ## Files
 
 ```
-index.html          page shell and meta tags
-content.js          ← your content
-assets/css/main.css all styles; color tokens at the top
-assets/js/main.js   rendering, grid, viewer, animations (no libraries)
-media/              videos, previews and posters, one folder per project
-tools/encode.sh     ffmpeg helper for your masters
-docs/preview.jpg    screenshot used in this README
+index.html             page shell and meta tags
+content.js             ← your content
+assets/css/main.css    all styles; color tokens at the top
+assets/js/main.js      rendering, grid, viewer, animations (no libraries)
+media/                 videos, previews and posters, one folder per project
+tools/encode.sh        ffmpeg helper for your masters
+tools/new-projects.txt blocks written by encode.sh, ready to paste (created when you run it)
+docs/preview.jpg       screenshot used in this README
 ```
 
 The sample projects, clients and credits are fictional, and the sample clips are generated placeholders. Replace them before you publish.
