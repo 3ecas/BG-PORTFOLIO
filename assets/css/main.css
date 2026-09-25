@@ -292,8 +292,6 @@ svg { display: block; }
   border-bottom-color: var(--line);
 }
 .nav.is-hidden { transform: translateY(-101%); }
-/* Tabbing into the hidden nav brings it back. */
-.nav.is-hidden:has(:focus-visible) { transform: none; }
 .nav__inner {
   height: var(--nav-h); display: flex; align-items: center; gap: 28px;
   padding-inline: var(--gutter);

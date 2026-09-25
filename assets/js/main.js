@@ -448,6 +448,8 @@
       lastY = y;
     };
     addEventListener('scroll', update, { passive: true });
+    // Tabbing into the hidden nav brings it back (and the stuck filter bar moves down with it).
+    nav.addEventListener('focusin', (e) => { if (e.target.matches(':focus-visible')) nav.classList.remove('is-hidden'); });
     update();
   }
 

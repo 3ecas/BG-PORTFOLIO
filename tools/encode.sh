@@ -59,10 +59,15 @@ is_video() {
 filesize() { wc -c < "$1" | tr -d ' '; }
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
 ff() { ffmpeg -nostdin -hide_banner -loglevel error "$@"; }
-# media/<name>/.encoded records which master a folder was made from: a checksum
-# of the master's file name, its size and its date (no paths), then the format,
-# length and frame rate it had.
-master_id() { printf '%s %s %s' "$(printf '%s' "$(basename "$1")" | cksum | cut -d' ' -f1)" "$(filesize "$1")" "$(mtime "$1")"; }
+cks() { printf '%s' "$1" | cksum | cut -d' ' -f1; }
+folder_of() { local d; d="$(cd "$(dirname "$1")" 2>/dev/null && pwd)" || d="$(dirname "$1")"; basename "$d"; }
+# media/<name>/.encoded records which master a folder was made from, without its
+# path: checksums of the master's file name and its folder's name, its size and
+# date, then the format, length and frame rate it had:
+#   <name sum> <size> <date> <folder sum> | <format> <length> <fps>
+master_id() { printf '%s %s %s' "$(cks "$(basename "$1")")" "$(filesize "$1")" "$(mtime "$1")"; }
+place_id() { printf '%s %s' "$(cks "$(basename "$1")")" "$(cks "$(folder_of "$1")")"; }
+complete() { [ -s "$1/video.mp4" ] && [ -s "$1/preview.mp4" ] && [ -s "$1/poster.jpg" ]; }
 
 # ---- Collect inputs: files, or every video inside folders ------------------
 FILES=()
@@ -85,31 +90,69 @@ fi
 if [ ${#FILES[@]} -eq 0 ]; then echo "No video files found." >&2; exit 1; fi
 
 # ---- Link names ------------------------------------------------------------
-# From the file name. Videos in this run that share a name get their folder's
-# name in front; the page's own section names get -project added.
-BASES=()
-for IN in "${FILES[@]}"; do BASES+=("$(slugify "$(basename "${IN%.*}")")"); done
-SLUGS=()
+# First, each master gets back the folder it was encoded into before: the same
+# file (name, size and date, wherever it is now), or a new export with the same
+# name from the same folder. The rest are named after their file (with their
+# folder's name in front when names clash), never taking another master's folder.
+# The page's own section names get -project added.
+unreserve() { case "$1" in top|highlights|work|about|contact|main|nav|menu|rail|footer|viewer|grid|index|marquee|showreel) echo "$1-project" ;; *) echo "$1" ;; esac; }
 USED=" "
-i=0
-for IN in "${FILES[@]}"; do
-  if [ -n "$SLUG_ARG" ]; then
-    SLUG="$SLUG_ARG"
-  else
-    SLUG="${BASES[$i]}"
-    # The one already encoded under the plain name keeps it.
-    if [ -n "$SLUG" ] && [ "$(printf '%s\n' "${BASES[@]}" | grep -cx -- "$SLUG" || true)" -gt 1 ] \
-       && [ "$(sed 's/ | .*//' "$ROOT/media/$SLUG/.encoded" 2>/dev/null || true)" != "$(master_id "$IN")" ]; then
-      SLUG="$(slugify "$(basename "$(dirname "$IN")")-$SLUG")"
-    fi
-  fi
-  if [ -z "$SLUG" ]; then SLUG="project"; fi
-  case "$SLUG" in top|highlights|work|about|contact|main|nav|menu|rail|footer|viewer|grid|index|marquee|showreel) SLUG="$SLUG-project" ;; esac
-  CANDIDATE="$SLUG"; N=2
-  while case "$USED" in *" $CANDIDATE "*) true ;; *) false ;; esac; do CANDIDATE="$SLUG-$N"; N=$((N + 1)); done
-  SLUGS+=("$CANDIDATE"); USED="$USED$CANDIDATE "
-  i=$((i + 1))
+taken() { case "$USED" in *" $1 "*) return 0 ;; esac; return 1; }
+# Can a new video use media/$1? Not if this run took it or another master's
+# .encoded is there. A shipped sample (video.mp4 but no preview.mp4) is replaced.
+# A set made before .encoded notes existed goes to the video of that exact name ($2).
+free_for() {
+  if taken "$1" || [ -f "$ROOT/media/$1/.encoded" ]; then return 1; fi
+  if [ ! -f "$ROOT/media/$1/video.mp4" ] || [ ! -f "$ROOT/media/$1/preview.mp4" ]; then return 0; fi
+  [ "$1" = "$2" ]
+}
+MARKS=""
+for m in "$ROOT"/media/*/.encoded; do
+  if [ -f "$m" ]; then MARKS="$MARKS$(basename "$(dirname "$m")") $(head -n1 "$m" | tr -d '\r')
+"; fi
 done
+SLUGS=(); BASES=()
+for IN in "${FILES[@]}"; do SLUGS+=(""); BASES+=("$(slugify "$(basename "${IN%.*}")")"); done
+if [ -n "$SLUG_ARG" ]; then
+  SLUGS[0]="$(unreserve "$SLUG_ARG")"
+else
+  for PASS in same-file same-place; do
+    i=0
+    for IN in "${FILES[@]}"; do
+      if [ -z "${SLUGS[$i]}" ]; then
+        if [ "$PASS" = same-file ]; then
+          FOUND="$(printf '%s' "$MARKS" | awk -v k="$(master_id "$IN")" '$2 " " $3 " " $4 == k { print $1 }')"
+        else
+          FOUND="$(printf '%s' "$MARKS" | awk -v k="$(place_id "$IN")" '$2 " " $5 == k { print $1 }')"
+        fi
+        for S in $FOUND; do
+          if ! taken "$S"; then SLUGS[$i]="$S"; USED="$USED$S "; break; fi
+        done
+      fi
+      i=$((i + 1))
+    done
+  done
+  i=0
+  for IN in "${FILES[@]}"; do
+    if [ -z "${SLUGS[$i]}" ]; then
+      PLAIN=""; PREFIXED=""
+      if [ -n "${BASES[$i]}" ]; then
+        PLAIN="$(unreserve "${BASES[$i]}")"
+        PREFIXED="$(unreserve "$(slugify "$(folder_of "$IN")-${BASES[$i]}")")"
+      fi
+      if [ -z "$PLAIN" ]; then SLUG="project"
+      elif [ "$(printf '%s\n' "${BASES[@]}" | grep -cx -- "${BASES[$i]}" || true)" -gt 1 ]; then SLUG="$PREFIXED"
+      else SLUG="$PLAIN"; fi
+      CANDIDATE="$SLUG"; N=2
+      while ! free_for "$CANDIDATE" "$PLAIN"; do
+        if [ "$SLUG" = "$PLAIN" ] && [ "$PREFIXED" != "$PLAIN" ]; then SLUG="$PREFIXED"; CANDIDATE="$SLUG"
+        else CANDIDATE="$SLUG-$N"; N=$((N + 1)); fi
+      done
+      SLUGS[$i]="$CANDIDATE"; USED="$USED$CANDIDATE "
+    fi
+    i=$((i + 1))
+  done
+fi
 
 # ---- Read a master's size, frame rate, length, orientation and audio -------
 probe_one() { ffprobe -v error -select_streams v:0 -show_entries "$2" -of default=nw=1:nk=1 "$1" 2>/dev/null | tr -d '\r' | head -n1 || true; }
@@ -138,11 +181,14 @@ probe_master() {
 }
 
 # ---- content.js blocks -----------------------------------------------------
+# make_block sets BLOCK (with the run's heading before the first one); add_block
+# appends it using builtins only, so it can run while stop signals are held off.
 RUN_TEXT=""
-write_block() {
-  local SLUG="$1" BASE="$2" NOTE="$3" OUT="$ROOT/media/$1"
-  local COLOR TITLE BLOCK
-  COLOR="$(ff -i "$OUT/poster.jpg" -vf scale=1:1 -f rawvideo -pix_fmt rgb24 - 2>/dev/null | od -An -tx1 | tr -d ' \n' | cut -c1-6 || true)"
+HEADING="    // ── Encoded $(date '+%Y-%m-%d %H:%M') ─────────────────────────────"
+make_block() {
+  local SLUG="$1" BASE="$2" NOTE="$3" POSTER="$4"
+  local COLOR TITLE
+  COLOR="$(ff -i "$POSTER" -vf scale=1:1 -f rawvideo -pix_fmt rgb24 - 2>/dev/null | od -An -tx1 | tr -d ' \n' | cut -c1-6 || true)"
   TITLE="$(echo "$BASE" | sed -E 's/[_-]+/ /g; s/ +v[0-9]+$//; s/^ +//; s/ +$//' | sed 's/\\/\\\\/g; s/"/\\"/g')"
   BLOCK="$(cat <<SNIPPET
     // $NOTE
@@ -167,14 +213,14 @@ write_block() {
     },
 SNIPPET
 )"
-  # One heading per run, written with its first block.
-  if [ -z "$RUN_TEXT" ]; then
-    RUN_TEXT="    // ── Encoded $(date '+%Y-%m-%d %H:%M') ─────────────────────────────"
-    printf '\n%s\n' "$RUN_TEXT" >> "$LIST"
-  fi
+  if [ -z "$RUN_TEXT" ]; then BLOCK="
+$HEADING
+$BLOCK"; fi
+}
+add_block() {
   printf '%s\n' "$BLOCK" >> "$LIST"
-  RUN_TEXT="$RUN_TEXT
-$BLOCK"
+  if [ -z "$RUN_TEXT" ]; then RUN_TEXT="${BLOCK#?}"; else RUN_TEXT="$RUN_TEXT
+$BLOCK"; fi
 }
 
 # ffmpeg handles Ctrl-C itself and exits normally, so without this bash would carry
@@ -182,7 +228,7 @@ $BLOCK"
 OUT_NOW=""
 on_stop() {
   trap '' INT TERM HUP
-  if [ -n "$OUT_NOW" ]; then rm -f "$OUT_NOW/video.part.mp4" "$OUT_NOW/preview.part.mp4" "$OUT_NOW/poster.part.jpg"; fi
+  if [ -n "$OUT_NOW" ]; then drop_parts "$OUT_NOW"; fi
   {
     echo
     echo "Stopped. Blocks for the videos that finished are in tools/new-projects.txt."
@@ -224,7 +270,7 @@ encode_one() {
   # New files are written next to the old ones and swapped in at the end, so a
   # failed or stopped encode leaves the previous set (and its .encoded) as it was.
   OUT_NOW="$OUT"
-  fail() { echo "   ✗ $BASE: $1" >&2; rm -f "$OUT/video.part.mp4" "$OUT/preview.part.mp4" "$OUT/poster.part.jpg"; OUT_NOW=""; }
+  fail() { echo "   ✗ $BASE: $1" >&2; drop_parts "$OUT"; OUT_NOW=""; }
 
   if ! ff -y -i "$IN" -map 0:v:0 -vf "$FIT_FULL,format=yuv420p" \
     -c:v libx264 -preset slow -crf "$CRF" -profile:v high -movflags +faststart \
@@ -256,16 +302,12 @@ encode_one() {
   fi
   echo "   poster ✓"
 
-  if ! { mv -f "$OUT/preview.part.mp4" "$OUT/preview.mp4" && mv -f "$OUT/poster.part.jpg" "$OUT/poster.jpg" \
-         && mv -f "$OUT/video.part.mp4" "$OUT/video.mp4"; }; then
-    fail "could not save the files in media/$SLUG"; return 1
-  fi
-  OUT_NOW=""
-  printf '%s | %s %s %s\n' "$(master_id "$IN")" "$FORMAT" "$DURATION" "${FPS:-25}" > "$OUT/.encoded"
-  echo "   saved in media/$SLUG ($(du -h "$OUT/video.mp4" | cut -f1 | tr -d ' '))"
-  echo
   return 0
 }
+drop_parts() { rm -f "$1/video.part.mp4" "$1/preview.part.mp4" "$1/poster.part.jpg"; }
+note_line() { printf '%s %s | %s %s %s' "$(master_id "$1")" "$(cks "$(folder_of "$1")")" "$FORMAT" "$DURATION" "${FPS:-25}"; }
+describe() { probe_master "$1" && printf '%s %s %s' "$FORMAT" "$DURATION" "${FPS:-25}"; }
+skip() { echo "• $1 already encoded in media/$2 (FORCE=1 to redo)"; SKIPPED=$((SKIPPED + 1)); }
 
 # ---- Go --------------------------------------------------------------------
 echo "Encoding ${#FILES[@]} video(s) into media/"
@@ -282,32 +324,58 @@ for IN in "${FILES[@]}"; do
     FAILED=$((FAILED + 1)); continue
   fi
 
-  # What the folder held before: nothing, a sample (no .encoded), or an earlier encode.
-  WAS=""; HAD_VIDEO=0
-  if [ -f "$OUTD/.encoded" ]; then WAS="$(cat "$OUTD/.encoded")"; fi
-  if [ -s "$OUTD/video.mp4" ]; then HAD_VIDEO=1; fi
-  if [ "$FORCE" != "1" ] && [ -n "$WAS" ] && [ "${WAS%% | *}" = "$(master_id "$IN")" ] \
-     && [ -s "$OUTD/video.mp4" ] && [ -s "$OUTD/preview.mp4" ] && [ -s "$OUTD/poster.jpg" ]; then
-    echo "• $BASE already encoded in media/$SLUG (FORCE=1 to redo)"
-    SKIPPED=$((SKIPPED + 1)); continue
+  # What the folder held: nothing, a shipped sample (no preview.mp4), a set from an
+  # earlier run (.encoded), or a set made before .encoded notes existed.
+  WAS=""; SAMPLE=0
+  if [ -f "$OUTD/.encoded" ]; then
+    WAS="$(head -n1 "$OUTD/.encoded" | tr -d '\r')"
+    if [ "$FORCE" != "1" ] && [ "$(echo "$WAS" | cut -d' ' -f1-3)" = "$(master_id "$IN")" ] && complete "$OUTD"; then
+      skip "$BASE" "$SLUG"; continue
+    fi
+    WAS="${WAS#* | }"
+  elif [ -s "$OUTD/video.mp4" ] && [ ! -f "$OUTD/preview.mp4" ]; then
+    SAMPLE=1
+  elif complete "$OUTD"; then
+    WAS="$(describe "$OUTD/video.mp4" || true)"
+    if [ "$FORCE" != "1" ] && [ "$WAS" = "$FORMAT $DURATION ${FPS:-25}" ]; then
+      note_line "$IN" > "$OUTD/.encoded"; skip "$BASE" "$SLUG"; continue
+    fi
   fi
 
-  if encode_one "$IN" "$SLUG" "$BASE"; then
-    DONE=$((DONE + 1))
-    case "$SLUG" in *reel*) REEL="$SLUG" ;; esac
-    if [ -n "$WAS" ] && [ "${WAS#* | }" = "$FORMAT $DURATION ${FPS:-25}" ]; then
-      NOTE="UPDATED video: if media/$SLUG is already in content.js, nothing there needs to change"; UPDN=$((UPDN + 1))
-    elif [ -n "$WAS" ]; then
-      NOTE="UPDATED video, was ${WAS#* | }: if media/$SLUG is already in content.js, copy the new format, duration and fps from here"; UPDN=$((UPDN + 1))
-    elif [ "$HAD_VIDEO" = 1 ]; then
-      NOTE="NEW (media/$SLUG held a sample video, now replaced: delete the sample project \"$SLUG\" from content.js)"; NEWN=$((NEWN + 1))
-    else
-      NOTE="NEW"; NEWN=$((NEWN + 1))
-    fi
-    write_block "$SLUG" "$BASE" "$NOTE"
+  if ! encode_one "$IN" "$SLUG" "$BASE"; then FAILED=$((FAILED + 1)); continue; fi
+  if [ -n "$WAS" ] && [ "$WAS" = "$FORMAT $DURATION ${FPS:-25}" ]; then
+    NOTE="UPDATED video: if media/$SLUG is already in content.js, nothing there needs to change"
+  elif [ -n "$WAS" ]; then
+    NOTE="UPDATED video, was $WAS: if media/$SLUG is already in content.js, copy the new format, duration and fps from here"
+  elif [ "$SAMPLE" = 1 ]; then
+    NOTE="NEW (media/$SLUG held a sample video, now replaced: delete the sample project \"$SLUG\" from content.js)"
   else
-    FAILED=$((FAILED + 1))
+    NOTE="NEW"
   fi
+
+  # Swap the new files in, add the block and write .encoded as one step, with stop
+  # signals held off for those few milliseconds: a finished video always has its block.
+  make_block "$SLUG" "$BASE" "$NOTE" "$OUTD/poster.part.jpg"
+  LINE="$(note_line "$IN")"
+  SAVED=0
+  trap '' INT TERM HUP
+  if mv -f "$OUTD/preview.part.mp4" "$OUTD/preview.mp4" && mv -f "$OUTD/poster.part.jpg" "$OUTD/poster.jpg" \
+     && mv -f "$OUTD/video.part.mp4" "$OUTD/video.mp4"; then
+    OUT_NOW=""
+    add_block
+    printf '%s\n' "$LINE" > "$OUTD/.encoded"
+    SAVED=1
+  fi
+  trap 'on_stop 130' INT; trap 'on_stop 143' TERM; trap 'on_stop 129' HUP
+  if [ "$SAVED" = 0 ]; then
+    echo "   ✗ $BASE: could not save the files in media/$SLUG" >&2
+    drop_parts "$OUTD"; OUT_NOW=""; FAILED=$((FAILED + 1)); continue
+  fi
+  echo "   saved in media/$SLUG ($(du -h "$OUTD/video.mp4" | cut -f1 | tr -d ' '))"
+  echo
+  DONE=$((DONE + 1))
+  case "$NOTE" in NEW*) NEWN=$((NEWN + 1)) ;; *) UPDN=$((UPDN + 1)) ;; esac
+  if [ -n "$SLUG_ARG" ]; then REEL="$SLUG"; else case "$SLUG" in *reel*) REEL="$SLUG" ;; esac; fi
 done
 
 if [ -n "$RUN_TEXT" ]; then
@@ -317,8 +385,8 @@ if [ -n "$RUN_TEXT" ]; then
   echo "These blocks were added to the end of tools/new-projects.txt."
   if [ "$NEWN" -gt 0 ]; then echo "Paste the blocks marked NEW into the projects list in content.js."; fi
   if [ "$UPDN" -gt 0 ]; then echo "Blocks marked UPDATED are new versions of earlier videos: follow the note on each."; fi
-  if [ -n "$REEL" ] || [ -n "$SLUG_ARG" ]; then
-    echo "Showreel? Don't paste its block as a project. Point hero.reel in content.js at media/${REEL:-$SLUG_ARG}/ instead (README step 6)."
+  if [ -n "$REEL" ]; then
+    echo "Showreel? Don't paste its block as a project. Point hero.reel in content.js at media/$REEL/ instead (README step 6)."
   fi
 else
   echo "Nothing new to paste."
