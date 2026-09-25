@@ -61,12 +61,13 @@ mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; 
 ff() { ffmpeg -nostdin -hide_banner -loglevel error "$@"; }
 cks() { printf '%s' "$1" | cksum | cut -d' ' -f1; }
 folder_of() { local d; d="$(cd "$(dirname "$1")" 2>/dev/null && pwd)" || d="$(dirname "$1")"; basename "$d"; }
-# media/<name>/.encoded records which master a folder was made from, without its
-# path: checksums of the master's file name and its folder's name, its size and
-# date, then the format, length and frame rate it had:
+dir_of() { (cd "$(dirname "$1")" 2>/dev/null && pwd -P) || dirname "$1"; }
+# media/<name>/.encoded records which master a folder was made from, without
+# storing where it is: checksums of the master's file name and of its folder's
+# full path, its size and date, then the format, length and frame rate it had:
 #   <name sum> <size> <date> <folder sum> | <format> <length> <fps>
 master_id() { printf '%s %s %s' "$(cks "$(basename "$1")")" "$(filesize "$1")" "$(mtime "$1")"; }
-place_id() { printf '%s %s' "$(cks "$(basename "$1")")" "$(cks "$(folder_of "$1")")"; }
+place_id() { printf '%s %s' "$(cks "$(basename "$1")")" "$(cks "$(dir_of "$1")")"; }
 complete() { [ -s "$1/video.mp4" ] && [ -s "$1/preview.mp4" ] && [ -s "$1/poster.jpg" ]; }
 
 # ---- Collect inputs: files, or every video inside folders ------------------
@@ -305,8 +306,15 @@ encode_one() {
   return 0
 }
 drop_parts() { rm -f "$1/video.part.mp4" "$1/preview.part.mp4" "$1/poster.part.jpg"; }
-note_line() { printf '%s %s | %s %s %s' "$(master_id "$1")" "$(cks "$(folder_of "$1")")" "$FORMAT" "$DURATION" "${FPS:-25}"; }
-describe() { probe_master "$1" && printf '%s %s %s' "$FORMAT" "$DURATION" "${FPS:-25}"; }
+note_line() { printf '%s %s | %s %s %s' "$(master_id "$1")" "$(cks "$(dir_of "$1")")" "$FORMAT" "$DURATION" "${FPS:-25}"; }
+# Width, height, format, length and fps of an existing video.mp4.
+describe() { probe_master "$1" && printf '%s %s %s %s %s' "$W" "$H" "$FORMAT" "$DURATION" "${FPS:-25}"; }
+# Does that description fit the master just probed? Same length and fps, and the
+# same shape (the web copy is scaled down, so compare ratios, not sizes).
+same_shape() {
+  [ $# -eq 5 ] && [ "$4" = "$DURATION" ] && [ "$5" = "${FPS:-25}" ] \
+    && awk -v a="$1" -v b="$2" -v c="$W" -v d="$H" 'BEGIN { if (b <= 0 || d <= 0 || c <= 0) exit 1; r = (a / b) / (c / d); exit !(r > 0.99 && r < 1.01) }'
+}
 skip() { echo "• $1 already encoded in media/$2 (FORCE=1 to redo)"; SKIPPED=$((SKIPPED + 1)); }
 
 # ---- Go --------------------------------------------------------------------
@@ -330,15 +338,26 @@ for IN in "${FILES[@]}"; do
   if [ -f "$OUTD/.encoded" ]; then
     WAS="$(head -n1 "$OUTD/.encoded" | tr -d '\r')"
     if [ "$FORCE" != "1" ] && [ "$(echo "$WAS" | cut -d' ' -f1-3)" = "$(master_id "$IN")" ] && complete "$OUTD"; then
+      # Keep the note current (the master may have moved since).
+      LINE="$(note_line "$IN")"
+      if [ "$LINE" != "$WAS" ]; then printf '%s\n' "$LINE" > "$OUTD/.encoded"; fi
       skip "$BASE" "$SLUG"; continue
     fi
     WAS="${WAS#* | }"
   elif [ -s "$OUTD/video.mp4" ] && [ ! -f "$OUTD/preview.mp4" ]; then
     SAMPLE=1
   elif complete "$OUTD"; then
-    WAS="$(describe "$OUTD/video.mp4" || true)"
-    if [ "$FORCE" != "1" ] && [ "$WAS" = "$FORMAT $DURATION ${FPS:-25}" ]; then
-      note_line "$IN" > "$OUTD/.encoded"; skip "$BASE" "$SLUG"; continue
+    # Only reached under the video's own file name (or a name you gave).
+    OLD="$(describe "$OUTD/video.mp4" || true)"
+    # shellcheck disable=SC2086
+    if [ -n "$OLD" ] && same_shape $OLD; then
+      WAS="$FORMAT $DURATION ${FPS:-25}"
+      # A name you gave may hold a different video of the same length: re-encode.
+      if [ "$FORCE" != "1" ] && [ -z "$SLUG_ARG" ]; then
+        note_line "$IN" > "$OUTD/.encoded"; skip "$BASE" "$SLUG"; continue
+      fi
+    else
+      WAS="$(echo "$OLD" | cut -d' ' -f3-)"
     fi
   fi
 
