@@ -34,18 +34,23 @@ The page works like a composition on a timeline. Your scroll position is a playh
 You only do steps 1–2 once.
 
 1. **Install ffmpeg.** On a Mac: install [Homebrew](https://brew.sh), then run `brew install ffmpeg` in Terminal. On Windows: run `winget install Gyan.FFmpeg` in PowerShell, then install [Git for Windows](https://git-scm.com/download/win), which includes **Git Bash**.
-2. **Get this site on your computer.** On GitHub, click **Code → Download ZIP** and unzip it, or use GitHub Desktop.
+2. **Get your site on your computer.** On your repository's page on GitHub, click **Code → Download ZIP** and unzip it, or open it with GitHub Desktop.
 3. **Open a terminal in the site folder.** On a Mac, right-click the folder and choose **New Terminal at Folder**. On Windows, right-click the folder and choose **Open Git Bash here**.
 4. **Encode your whole videos folder in one go.** Type `bash tools/encode.sh `, then drag your videos folder onto the terminal window so its path is filled in, and press Enter:
    ```bash
    bash tools/encode.sh "/Users/you/Desktop/videos portfolio"
    ```
    Every video inside (MOV, MP4, ProRes…) becomes a web-ready set in `media/<name>/`. A ready-made block for each one is saved in `tools/new-projects.txt`. Run it again after adding more videos: the ones already done are skipped.
-5. **Describe your projects.** Open `content.js` in any text editor. Delete the sample projects and paste in the blocks from `tools/new-projects.txt`. For each project, fill in the title, client, categories, summary and so on.
-6. **Pick your highlights and reel.** Put your best slugs in `highlights`, and point `hero.reel` at your showreel (encode it the same way).
-7. **Remove the samples.** Delete the sample folders in `media/` that you no longer use.
-8. **Check it.** Double-click `index.html`.
-9. **Upload.** On GitHub, go to **Add file → Upload files**, drag in `content.js` and your new `media` folders, and click **Commit changes**. The web uploader accepts files up to 25 MB. For bigger videos, use GitHub Desktop (up to 100 MB per file), or host the full video on Vimeo (see below).
+5. **Describe your projects.** Open `content.js` in a code editor such as [VS Code](https://code.visualstudio.com) (free). Don't use TextEdit or Word, which turn `"` into curly quotes and break the file. Delete the sample projects and paste in the blocks from `tools/new-projects.txt`. For each project, fill in the title, client, categories, summary and so on.
+6. **Pick your highlights and reel.** Put your best slugs in `highlights`. Encode your showreel with its own name, for example `bash tools/encode.sh ~/Renders/showreel.mov my-showreel`, but don't paste its block into the projects. Instead, in `content.js` under `hero.reel`:
+   - set `video: "media/my-showreel/video.mp4"` and `poster: "media/my-showreel/poster.jpg"`, and copy `duration` and `fps` from its block;
+   - if you also have a 9:16 cut, encode it the same way (for example as `my-showreel-vertical`) and point `videoVertical`, `posterVertical` and `durationVertical` at it. If you don't, set `videoVertical: ""` and `posterVertical: ""`, and phones will use your 16:9 reel.
+7. **Check it.** Double-click `index.html`. If you see a yellow message saying `content.js` could not be read, there's a typo in it (usually curly quotes or a missing comma). Press F12 (Cmd+Option+J on a Mac) and the Console names the line.
+8. **Upload.** On your repository on GitHub:
+   - on the main page, click **Add file → Upload files**, drag in `content.js`, and click **Commit changes**;
+   - then open the `media` folder, click **Add file → Upload files** there, drag in your new project folders, and click **Commit changes**. Folders dropped on the main page land outside `media/`, and their videos won't load.
+
+   The web uploader takes up to 100 files at a time, 25 MB each. For bigger videos, use GitHub Desktop (up to 100 MB per file), or host the full video on Vimeo (see below). Sample folders you no longer use can stay: anything not listed in `content.js` isn't shown. To delete them, use GitHub Desktop or delete their files on GitHub.
 
 ## Reference
 
@@ -55,8 +60,10 @@ You only do steps 1–2 once.
 
 ```bash
 bash tools/encode.sh ~/Desktop/"videos portfolio"          # every video in the folder
-bash tools/encode.sh ~/Renders/Halden_Ident_v12.mov signal-bloom
+bash tools/encode.sh ~/Renders/Halden_Ident_v12.mov halden-ident
 ```
+
+The script remembers which master made each folder (in `tools/encoded.txt`, which stays on your computer). Re-running it after adding videos only encodes the new ones, and `tools/new-projects.txt` always lists every video from the last run.
 
 For each video it creates `media/<slug>/` containing:
 
@@ -68,7 +75,7 @@ For each video it creates `media/<slug>/` containing:
 
 Each project's block has the format, duration, frame rate and dominant color already filled in.
 
-Options go before the command. `POSTER_AT=4` picks the poster frame (seconds), `PREVIEW_START=3 PREVIEW_LEN=6` picks the preview loop, `CRF=20` raises quality (lower number = better and larger), and `FORCE=1` re-encodes videos that were already done. For example:
+Options go before the command. `POSTER_AT=4` picks the poster frame (seconds), `PREVIEW_START=3 PREVIEW_LEN=6` picks the preview loop, `CRF=20` raises quality (lower number = better and larger), and `FORCE=1` re-encodes videos that were already done. Link names the page uses for its own sections (`work`, `about`, `contact`…) get `-project` added. For example:
 
 ```bash
 POSTER_AT=4 CRF=20 bash tools/encode.sh ~/Desktop/"videos portfolio"

@@ -14,6 +14,16 @@
 
   /* ---------- 1. Setup & utilities ---------- */
   const DATA = window.PORTFOLIO || {};
+  if (!window.PORTFOLIO) {
+    // content.js didn't run: nearly always a typo (curly quotes, a missing comma). Say so on the page.
+    document.addEventListener('DOMContentLoaded', () => {
+      const note = document.createElement('p');
+      note.setAttribute('role', 'alert');
+      note.style.cssText = 'position:fixed;left:16px;right:16px;top:16px;z-index:300;margin:0;padding:14px 16px;border-radius:4px;background:#ffdf5d;color:#111;font:500 15px/1.45 system-ui,sans-serif';
+      note.textContent = 'content.js could not be read, so the site has no content. This is usually a typo in content.js: curly quotes instead of straight ones, or a missing comma between projects. Open the browser console (F12, or Cmd+Option+J on a Mac) to see the line.';
+      document.body.appendChild(note);
+    });
+  }
   const SITE = DATA.site || {};
   const HERO = DATA.hero || {};
   const ABOUT = DATA.about || {};
@@ -49,8 +59,10 @@
   /** Seconds → SMPTE-style non-drop-frame timecode HH:MM:SS:FF */
   function timecode(sec, fps = 25) {
     const r = Math.max(1, Math.round(fps));
-    // Frames are counted at the real rate (29.97, 23.976…) and labelled at the nominal one.
-    const frames = Math.floor(Math.max(0, sec || 0) * (fps || r) + 1e-6);
+    // Frames are counted at the real rate and labelled at the nominal one; 29.97 and
+    // 23.976 are treated as the exact NTSC rates (30000/1001, 24000/1001).
+    const rate = Math.abs(fps - r / 1.001) < 0.005 ? r / 1.001 : (fps || r);
+    const frames = Math.floor(Math.max(0, sec || 0) * rate + 1e-4);
     const s = Math.floor(frames / r);
     return `${pad(s / 3600)}:${pad((s / 60) % 60)}:${pad(s % 60)}:${pad(frames % r)}`;
   }
@@ -91,8 +103,10 @@
   function embedURL(p) {
     if (p.vimeo) {
       const s = String(p.vimeo).trim();
-      const id = (s.match(/(?:vimeo\.com\/(?:video\/|channels\/[^/]+\/|groups\/[^/]+\/videos\/)?)?(\d{5,})/) || [])[1];
-      const hash = (s.match(/[?&]h=([0-9a-f]+)/i) || s.match(/vimeo\.com\/\d+\/([0-9a-f]{6,})/i) || [])[1];
+      // Prefer the id after /video/ or /videos/ (showcase, album, manage, player links),
+      // then vimeo.com/<id>, then a bare id. The unlisted hash follows the id or sits in ?h=.
+      const id = (s.match(/\/videos?\/(\d{5,})/) || s.match(/vimeo\.com\/(?:channels\/[^/?#]+\/)?(\d{5,})/) || s.match(/^(\d{5,})/) || [])[1];
+      const hash = id && (s.match(/[?&]h=([0-9a-f]+)/i) || s.match(new RegExp(`(?:^|/)${id}/([0-9a-f]{6,})`, 'i')) || [])[1];
       if (id) return `https://player.vimeo.com/video/${id}?autoplay=1&title=0&byline=0&portrait=0&dnt=1${hash ? `&h=${hash}` : ''}`;
     }
     if (p.youtube) {
@@ -286,6 +300,8 @@
     },
     play(v, restart) {
       if (!v) return;
+      // While a project is up (from the click, through the transition, until closed), only the viewer plays.
+      if (Viewer.current && !v.closest('#viewer')) return;
       this.attach(v);
       v.muted = true;
       if (restart && v.readyState > 0) { try { v.currentTime = 0; } catch (e) { /* not seekable yet */ } }
@@ -343,8 +359,7 @@
     root.classList.toggle('is-still', on);
     $$('[data-motion]').forEach((b) => {
       b.setAttribute('aria-pressed', String(on));
-      b.setAttribute('aria-label', on ? 'Play motion' : 'Pause motion');
-      b.title = on ? 'Play motion' : 'Pause motion';
+      b.title = on ? 'Motion paused: click to play' : 'Pause motion';
     });
     if (on) {
       $$('#main video').forEach((v) => Media.pause(v));
@@ -420,7 +435,7 @@
         const ctl = $('.work__controls');
         const work = $('#work');
         const inGrid = mqPhone.matches && ctl && work && y >= 240
-          && ctl.getBoundingClientRect().top <= 1 && work.getBoundingClientRect().bottom > innerHeight * 0.6;
+          && ctl.getBoundingClientRect().top <= 1 && work.getBoundingClientRect().bottom > nav.offsetHeight + ctl.offsetHeight;
         if (!inGrid) nav.classList.remove('is-hidden');
       }
       lastY = y;
@@ -472,7 +487,7 @@
       const widest = Math.max(...this.lines.map((L) => L.el.offsetWidth)) || 1;
       this.lines.forEach((L) => { L.el.style.width = ''; });
       let fs = (100 * avail) / widest * this.o.fill;
-      fs = Math.min(fs, this.o.maxH / (this.lines.length * 0.82));
+      fs = Math.min(fs, this.o.maxH / (this.lines.length * 0.8 + 0.05));
       host.style.fontSize = `${Math.max(24, fs).toFixed(1)}px`;
       this.measure();
       wake();
@@ -533,7 +548,7 @@
         c.w += (w - c.w) * k0;
         c.g += (g - c.g) * k0;
         // Quantised axes let the browser reuse font instances instead of building one per frame.
-        const qw = Math.round(c.w * 2) / 2;
+        const qw = Math.round(c.w);
         const qg = Math.round(c.g / 10) * 10;
         if (qw !== c.lw || qg !== c.lg) {
           c.el.style.fontVariationSettings = `"wdth" ${qw}, "wght" ${qg}`;
@@ -620,22 +635,26 @@
       if (autoplayOK() && hero._visible) Media.play(video);
       if (lenEl) { const r = viewerReel(); lenEl.textContent = r && r.seconds ? clock(r.seconds) : ''; }
     };
-    if (video) {
-      setSource();
-      if ('IntersectionObserver' in window) {
-        // -1px keeps "resting exactly on the hero's bottom edge" from counting as visible.
-        new IntersectionObserver(([en]) => {
-          hero._visible = en.isIntersecting;
-          heroKinetic.visible = en.isIntersecting;
-          if (en.isIntersecting && autoplayOK() && !Viewer.isOpen) Media.play(video); else Media.pause(video);
-          wake();
-        }, { rootMargin: '-1px 0px 0px 0px' }).observe(hero);
-      }
+    if (video) setSource();
+    if ('IntersectionObserver' in window) {
+      // -1px keeps "resting exactly on the hero's bottom edge" from counting as visible.
+      new IntersectionObserver(([en]) => {
+        hero._visible = en.isIntersecting;
+        heroKinetic.visible = en.isIntersecting;
+        if (video) { if (en.isIntersecting && autoplayOK()) Media.play(video); else Media.pause(video); }
+        wake();
+      }, { rootMargin: '-1px 0px 0px 0px' }).observe(hero);
     }
 
     const fit = () => {
-      const maxH = hero.clientHeight - content.querySelector('.hero__foot').offsetHeight - (hero.clientHeight < 520 ? 120 : 220);
-      heroKinetic.o.maxH = Math.max(80, maxH);
+      const heroTop = hero.getBoundingClientRect().top;
+      const hud = $('.hero__hud', hero);
+      const nav = $('#nav');
+      const hudOn = hud && getComputedStyle(hud).display !== 'none';
+      const topClear = hudOn ? hud.getBoundingClientRect().bottom - heroTop + 28 : (nav ? nav.offsetHeight : 64) + 16;
+      const cs = getComputedStyle(content);
+      const below = content.querySelector('.hero__foot').offsetHeight + parseFloat(cs.paddingBottom) + parseFloat(cs.rowGap || 0);
+      heroKinetic.o.maxH = Math.max(48, (hero.clientHeight - topClear - below) * 0.97);
       heroKinetic.fit();
     };
     fit();
@@ -668,7 +687,8 @@
   const HL = { pinned: false, dist: 0, top: 0, x: 0, n: 0 };
   function renderHighlights() {
     const sec = $('#highlights');
-    const bySlugs = list(DATA.highlights).map((s) => BY_SLUG.get(slugify(s))).filter(Boolean);
+    const hlSlug = (s) => { const w = slugify(s); return BY_SLUG.has(w) ? w : `${w}-project`; };
+    const bySlugs = list(DATA.highlights).map((s) => BY_SLUG.get(hlSlug(s))).filter(Boolean);
     const items = bySlugs.length ? bySlugs : PROJECTS.filter((p) => p.featured);
     const shown = items.length ? items : PROJECTS.slice(0, 4);
     if (!shown.length) { sec.hidden = true; return; }
@@ -864,7 +884,7 @@
             <div class="tile__meta rv" style="--d:.08s">
               <h3 class="tile__title">${esc(p.title)}</h3>
               <span class="tile__dur mono">${esc(durLabel(p))}</span>
-              <p class="tile__sub mono">${[p.client, p.year].filter(Boolean).map(esc).join(' · ')}</p>
+              <p class="tile__sub mono">${[p.client, p.year].filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('')}</p>
             </div>
           </a>`).join('')}
       </div>
@@ -959,6 +979,7 @@
     }
     grid.style.height = `${Math.max(0, Math.max(...heights) - gap)}px`;
     W.gridTop = grid.getBoundingClientRect().top + scrollY;
+    W.parDirty = true;
     wake();
   }
 
@@ -1059,6 +1080,9 @@
       }
     };
 
+    $('.chips', sec).addEventListener('focusin', (e) => {
+      if (e.target.matches('.chip')) e.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
     sec.addEventListener('click', (e) => {
       const chip = e.target.closest('[data-cat]');
       const fmt = e.target.closest('[data-fmt]');
@@ -1100,9 +1124,11 @@
           const m = $('.media', el);
           const v = $('video', el);
           clearTimeout(el._bandT);
+          el._inBand = en.isIntersecting;
           if (en.isIntersecting && autoplayOK()) {
             // A fling passes straight through: only tiles that stay a moment start loading.
             el._bandT = setTimeout(() => {
+              if (!autoplayOK() || Viewer.current || !el._inBand) return;
               Media.play(v); playing.add(m);
               if (playing.size > 2) { const first = playing.values().next().value; Media.pause($('video', first)); playing.delete(first); }
             }, 300);
@@ -1118,7 +1144,7 @@
       const byEl = new Map(W.tiles.map((t) => [t.el, t]));
       const vis = new IntersectionObserver((entries) => entries.forEach((en) => {
         const t = byEl.get(en.target);
-        if (en.isIntersecting) onScreen.add(t);
+        if (en.isIntersecting) { onScreen.add(t); W.parDirty = true; wake(); }
         else {
           onScreen.delete(t);
           // Far off screen: let go of the preview's buffer (the poster stays).
@@ -1129,12 +1155,16 @@
     }
     let lastSy = -1;
     addTicker(() => {
+      let moving = false;
       playing.forEach((m) => {
         const v = $('video', m);
-        if (v && v.duration) m.style.setProperty('--prog', (v.currentTime / v.duration).toFixed(4));
+        if (!v || v.paused) return;
+        moving = true;
+        if (v.duration) m.style.setProperty('--prog', (v.currentTime / v.duration).toFixed(4));
       });
-      if (!reduced && W.view === 'grid' && S.sy !== lastSy) {
+      if (!reduced && W.view === 'grid' && (S.sy !== lastSy || W.parDirty)) {
         lastSy = S.sy;
+        W.parDirty = false;
         onScreen.forEach((t) => {
           if (!t || t.mh == null) return;
           const center = W.gridTop + t.y + t.mh / 2 - S.sy - S.vh / 2;
@@ -1145,7 +1175,7 @@
           }
         });
       }
-      return playing.size > 0;
+      return moving;
     });
     initFloat();
   }
@@ -1751,12 +1781,15 @@
       }
       const active = document.activeElement;
       this.returnFocus = (active && active.closest && active.closest('a, button')) || active;
-      // Background loops stop while the viewer covers the page; they resume on close.
-      this.paused = $$('#main video').filter((v) => !v.paused);
-      this.paused.forEach((v) => v.pause());
+      let shown = false;
       const show = () => {
+        if (shown) return;
+        shown = true;
         this.el.hidden = false;
         this.isOpen = true;
+        // Background loops stop while the viewer covers the page; the visible ones resume on close.
+        this.paused = $$('#main video').filter((v) => !v.paused);
+        this.paused.forEach((v) => v.pause());
         this.scroller.scrollTop = 0;
         const sbw = innerWidth - root.clientWidth;
         root.style.setProperty('--sbw', `${sbw}px`);
@@ -1769,11 +1802,16 @@
       const from = origin && this.visible(origin) ? origin : null;
       if (from && hasVT && !reduced) {
         from.style.viewTransitionName = 'vt-media';
+        wake();
         const vt = document.startViewTransition(() => {
           from.style.viewTransitionName = '';
           show();
-          this.stage.style.viewTransitionName = 'vt-media';
+          if (this.stage) this.stage.style.viewTransitionName = 'vt-media';
         });
+        // A transition can be skipped or arrive late (background tab, busy page): never leave the click unanswered.
+        const fallback = () => { if (!shown) { from.style.viewTransitionName = ''; show(); } };
+        const timer = setTimeout(fallback, 450);
+        vt.updateCallbackDone.then(() => clearTimeout(timer), fallback);
         vt.finished.finally(() => { if (this.stage) this.stage.style.viewTransitionName = ''; });
       } else {
         show();
@@ -1791,7 +1829,10 @@
       if (!this.isOpen || this.closing) return;
       this.closing = true;
       const p = this.current;
+      let finished = false;
       const finish = () => {
+        if (finished) return;
+        finished = true;
         this.el.hidden = true;
         root.classList.remove('is-locked', 'is-viewer-open');
         ['#nav', '#main', '#footer', '#rail', '.skip'].forEach((s) => { const n = $(s); if (n) n.inert = false; });
@@ -1802,7 +1843,14 @@
         this.closing = false;
         this.scroller.scrollTop = 0;
         document.title = baseTitle;
-        if (autoplayOK()) (this.paused || []).forEach((v) => { if (v.closest('.hero__media, .hl__link')) Media.play(v); });
+        if (autoplayOK()) {
+          (this.paused || []).forEach((v) => {
+            const hl = v.closest('.hl__link .media');
+            const tile = v.closest('.tile');
+            const back = hl ? hl._inView : tile ? tile._inBand : v.closest('.hero__media') && $('#top')._visible;
+            if (back) Media.play(v);
+          });
+        }
         this.paused = [];
         const back = this.returnFocus && document.contains(this.returnFocus) ? this.returnFocus : null;
         if (back) back.focus({ preventScroll: true });
@@ -1811,12 +1859,17 @@
       };
       const target = p ? this.originFor(p) : null;
       if (target && hasVT && !reduced && this.stage) {
-        this.stage.style.viewTransitionName = 'vt-media';
+        const stage = this.stage;
+        stage.style.viewTransitionName = 'vt-media';
+        wake();
         const vt = document.startViewTransition(() => {
-          this.stage.style.viewTransitionName = '';
+          stage.style.viewTransitionName = '';
           finish();
           target.style.viewTransitionName = 'vt-media';
         });
+        const fallback = () => { if (!finished) { stage.style.viewTransitionName = ''; finish(); } };
+        const timer = setTimeout(fallback, 700);
+        vt.updateCallbackDone.then(() => clearTimeout(timer), fallback);
         vt.finished.finally(() => { target.style.viewTransitionName = ''; });
       } else if (!reduced) {
         this.el.classList.add('is-leaving');
@@ -1902,10 +1955,11 @@
           const res = $('[data-spec="res"]', this.content);
           const len = $('[data-spec="len"]', this.content);
           if (res && v.videoWidth) res.textContent = `${v.videoWidth} × ${v.videoHeight}`;
-          if (len && !p.seconds && v.duration) len.textContent = timecode(v.duration, p.fps);
-          if (p.isReel && !p.seconds && v.duration) {
+          const d = v.duration;
+          if (len && isFinite(d) && d > 0) len.textContent = timecode(d, p.fps);
+          if (p.isReel && isFinite(d) && d > 0) {
             const lenEl = $('[data-reel-len]');
-            if (lenEl) lenEl.textContent = clock(v.duration);
+            if (lenEl) lenEl.textContent = clock(d);
           }
         };
       }
